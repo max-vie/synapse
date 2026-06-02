@@ -1,0 +1,120 @@
+name: synapse-e2e
+services:
+  qdrant:
+    image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.18.1}
+    restart: unless-stopped
+    profiles:
+    - infra
+    - full
+    ports:
+    - 127.0.0.1:${QDRANT_PORT:-6333}:6333
+    volumes:
+    - qdrant-data:/qdrant/storage
+  ollama:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.24.0}
+    restart: unless-stopped
+    profiles:
+    - infra
+    - full
+    ports:
+    - 127.0.0.1:${OLLAMA_PORT:-11434}:11434
+    volumes:
+    - ollama-data:/root/.ollama
+  synapse-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${SYNAPSE_SERVICE_IMAGE:-synapse-service:local}
+    restart: unless-stopped
+    profiles:
+    - full
+    depends_on:
+    - qdrant
+    - ollama
+    - wikijs
+    working_dir: /app/scripts
+    command: python -m synapse.service
+    ports:
+    - 127.0.0.1:${SYNAPSE_SERVICE_PORT:-15515}:8080
+    environment:
+      OLLAMA_INTERNAL_BASE_URL: ${OLLAMA_INTERNAL_BASE_URL:-http://ollama:11434}
+      OLLAMA_CHAT_BASE_URL: ${OLLAMA_CHAT_BASE_URL:-}
+      OLLAMA_ANSWER_MODEL: ${OLLAMA_ANSWER_MODEL:-tinyllama:latest}
+      OLLAMA_FORMAT_MODEL: ${OLLAMA_FORMAT_MODEL:-tinyllama:latest}
+      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+      OLLAMA_FORMAT_NUM_PREDICT: ${OLLAMA_FORMAT_NUM_PREDICT:-768}
+      OLLAMA_ANSWER_NUM_PREDICT: ${OLLAMA_ANSWER_NUM_PREDICT:-256}
+      WIKIJS_BASE_URL: http://wikijs:3000
+      WIKIJS_PUBLIC_BASE_URL: ${WIKIJS_PUBLIC_BASE_URL:-}
+      WIKIJS_API_TOKEN: ${WIKIJS_API_TOKEN:-replace-after-wikijs-setup}
+      WIKIJS_LOCALE: ${WIKIJS_LOCALE:-en}
+      QDRANT_BASE_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-synapse_notes__nomic_embed_text__768}
+      RAG_TOP_K: ${RAG_TOP_K:-5}
+      RAG_CANDIDATE_K: ${RAG_CANDIDATE_K:-25}
+      RAG_SCORE_THRESHOLD: ${RAG_SCORE_THRESHOLD:-0.35}
+      RAG_QUERY_TERM_MIN_COVERAGE: ${RAG_QUERY_TERM_MIN_COVERAGE:-0.6}
+      RAG_QUERY_TERM_MIN_MATCHES: ${RAG_QUERY_TERM_MIN_MATCHES:-2}
+      RAG_DOMAIN_GLOSSARY_JSON: ${RAG_DOMAIN_GLOSSARY_JSON:-{}}
+      SYNAPSE_MAX_CONTENT_BYTES: ${SYNAPSE_MAX_CONTENT_BYTES:-262144}
+      SYNAPSE_MAX_CHUNKS_PER_NOTE: ${SYNAPSE_MAX_CHUNKS_PER_NOTE:-32}
+      SYNAPSE_MAX_QUESTION_LENGTH: ${SYNAPSE_MAX_QUESTION_LENGTH:-1000}
+      SYNAPSE_MAX_PARALLEL_EXECUTIONS: ${SYNAPSE_MAX_PARALLEL_EXECUTIONS:-2}
+      SYNAPSE_EMBED_BATCH_SIZE: ${SYNAPSE_EMBED_BATCH_SIZE:-16}
+      SYNAPSE_HTTP_TIMEOUT_SECONDS: ${SYNAPSE_HTTP_TIMEOUT_SECONDS:-60}
+      SYNAPSE_ANSWER_MODE: ${SYNAPSE_ANSWER_MODE:-llm}
+      SYNAPSE_ANSWER_VALIDATION: ${SYNAPSE_ANSWER_VALIDATION:-structural}
+      RAG_QUOTE_OVERLAP_THRESHOLD: ${RAG_QUOTE_OVERLAP_THRESHOLD:-0.3}
+      SYNAPSE_SERVICE_PORT: 8080
+      SYNAPSE_CONTAINER_BIND: 'true'
+      SYNAPSE_WEBHOOK_AUTH_TOKEN: ${SYNAPSE_WEBHOOK_AUTH_TOKEN:?set SYNAPSE_WEBHOOK_AUTH_TOKEN in .env; use SYNAPSE_AUTH_DISABLED=true only for no-network demo workflows}
+      SYNAPSE_AUTH_DISABLED: ${SYNAPSE_AUTH_DISABLED:-false}
+    volumes:
+    - ./scripts:/app/scripts:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+  wikijs-db:
+    image: ${WIKIJS_POSTGRES_IMAGE:-postgres:16-alpine}
+    restart: unless-stopped
+    profiles:
+    - infra
+    - full
+    environment:
+      POSTGRES_DB: ${WIKIJS_DB_NAME:-wiki}
+      POSTGRES_USER: ${WIKIJS_DB_USER:-wikijs}
+      POSTGRES_PASSWORD: ${WIKIJS_DB_PASSWORD}
+    volumes:
+    - wikijs-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - pg_isready -U ${WIKIJS_DB_USER:-wikijs} -d ${WIKIJS_DB_NAME:-wiki}
+      interval: 10s
+      timeout: 5s
+      retries: 20
+  wikijs:
+    image: ${WIKIJS_IMAGE:-ghcr.io/requarks/wiki:2.5.314}
+    restart: unless-stopped
+    profiles:
+    - infra
+    - full
+    depends_on:
+      wikijs-db:
+        condition: service_healthy
+    ports:
+    - 127.0.0.1:${WIKIJS_PORT:-3000}:3000
+    environment:
+      DB_TYPE: postgres
+      DB_HOST: wikijs-db
+      DB_PORT: 5432
+      DB_USER: ${WIKIJS_DB_USER:-wikijs}
+      DB_PASS: ${WIKIJS_DB_PASSWORD}
+      DB_NAME: ${WIKIJS_DB_NAME:-wiki}
+      NODE_OPTIONS: --no-deprecation
+volumes:
+  qdrant-data: null
+  ollama-data: null
+  wikijs-db-data: null

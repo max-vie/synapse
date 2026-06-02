@@ -1,0 +1,78 @@
+name: synapse-ci-e2e
+services:
+  mock-ollama:
+    image: ${MOCK_OLLAMA_IMAGE:-python:3.13-slim}
+    restart: unless-stopped
+    working_dir: /app/scripts/e2e
+    command: python mock_ollama.py --host '' --port 11435
+    expose:
+      - "11435"
+    volumes:
+      - ./scripts/e2e:/app/scripts/e2e:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:11435/api/tags', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  qdrant:
+    image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.18.1}
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:${QDRANT_PORT:-6633}:6333
+    volumes:
+      - qdrant-ci-data:/qdrant/storage
+
+  synapse-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${SYNAPSE_SERVICE_IMAGE:-synapse-service:local}
+    restart: unless-stopped
+    depends_on:
+      qdrant:
+        condition: service_started
+      mock-ollama:
+        condition: service_healthy
+    working_dir: /app/scripts
+    command: python -m synapse.service
+    ports:
+      - 127.0.0.1:${SYNAPSE_SERVICE_PORT:-6578}:8080
+    environment:
+      OLLAMA_INTERNAL_BASE_URL: http://mock-ollama:11435
+      OLLAMA_CHAT_BASE_URL: http://mock-ollama:11435
+      OLLAMA_FORMAT_MODEL: mock-format
+      OLLAMA_ANSWER_MODEL: mock-answer
+      OLLAMA_EMBED_MODEL: mock-embed
+      OLLAMA_FORMAT_NUM_PREDICT: 128
+      OLLAMA_ANSWER_NUM_PREDICT: 64
+      QDRANT_BASE_URL: http://qdrant:6333
+      QDRANT_COLLECTION: synapse_ci_e2e
+      QDRANT_VECTOR_SIZE: '8'
+      RAG_TOP_K: '3'
+      RAG_CANDIDATE_K: '10'
+      RAG_SCORE_THRESHOLD: '0'
+      RAG_QUERY_TERM_MIN_COVERAGE: '0.5'
+      RAG_QUERY_TERM_MIN_MATCHES: '2'
+      RAG_DOMAIN_GLOSSARY_JSON: '{}'
+      SYNAPSE_MAX_CONTENT_BYTES: '32768'
+      SYNAPSE_MAX_CHUNKS_PER_NOTE: '8'
+      SYNAPSE_MAX_QUESTION_LENGTH: '500'
+      SYNAPSE_MAX_PARALLEL_EXECUTIONS: '2'
+      SYNAPSE_EMBED_BATCH_SIZE: '8'
+      SYNAPSE_SERVICE_PORT: 8080
+      SYNAPSE_CONTAINER_BIND: 'true'
+      SYNAPSE_WEBHOOK_AUTH_TOKEN: ${SYNAPSE_WEBHOOK_AUTH_TOKEN:-ci-e2e-token}
+      SYNAPSE_AUTH_DISABLED: 'false'
+      SYNAPSE_ANSWER_VALIDATION: ${SYNAPSE_ANSWER_VALIDATION:-structural}
+      RAG_QUOTE_OVERLAP_THRESHOLD: ${RAG_QUOTE_OVERLAP_THRESHOLD:-0.3}
+    volumes:
+      - ./scripts:/app/scripts:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  qdrant-ci-data:
