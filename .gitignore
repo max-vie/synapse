@@ -1,0 +1,36 @@
+# Local secrets and runtime state
+.env
+.env.*
+!.env.example
+*.local
+*.secret
+secrets/
+credentials/
+.local-artifacts/
+tmp/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.coverage
+htmlcov/
+
+# Credential exports with live secrets
+*credentials*.json
+credentials.json
+
+# Obsidian local state
+examples/obsidian-vault/Synapse-Demo/e2e-*.md
+examples/obsidian-vault/Synapse-Demo/generated-proof-notes/
+.obsidian/workspace*.json
+.obsidian/cache/
+.trash/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
