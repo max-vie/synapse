@@ -1,0 +1,136 @@
+fixture_version: sanitized-adversarial-v1
+notes_glob: scripts/benchmark/fixtures/notes/*.md
+exact_preserve_blocks:
+  - source_path: scripts/benchmark/fixtures/notes/complex-lab-operations.md
+    text: "curl -sS -H 'X-Synapse-Benchmark: [TOKEN]' http://127.0.0.1:15515/webhook/benchmark-note > /tmp/synapse-bench.json"
+  - source_path: scripts/benchmark/fixtures/notes/config-and-commands.md
+    text: "python3 scripts/benchmark/ollama_models.py smoke --models tinyllama:latest,gemma2:2b --skip-pull"
+  - source_path: scripts/benchmark/fixtures/notes/config-and-commands.md
+    text: "allow_public_ingress = false"
+  - source_path: scripts/benchmark/fixtures/notes/incident-timeline.md
+    text: "incident_id=\"BENCH-INC-042\""
+format_expectations:
+  required_facts:
+    - ORCHID-17A
+    - bench-alpha-queue
+    - synapse_benchmark_notes
+    - LOCAL_LAB_ONLY_BOUNDARY
+    - EVID-SYN-BENCH-224034Z
+    - fresh-evidence-lantern-224034
+    - SRC-BOUND-9QX
+    - ultraviolet-blue
+    - BENCH-INC-042
+    - not production-ready
+    - private lab only
+    - no secret exposure
+    - public_ingress: fail-by-design
+    - fixture_set = "sanitized-adversarial-v1"
+    - max_parallel_models = 1
+    - allow_public_ingress = false
+  forbidden_facts:
+    - ORCH1D-17A is current
+    - synapse_notes_old is current
+    - public demo URL
+    - enterprise-ready
+    - Fortune 500 customer deployment
+    - SOC2-ready production SaaS
+    - private lab password is hunter2
+    - sk-live-0000
+    - expanded redaction
+    - public ingress URL
+questions:
+  - id: direct_codename
+    type: extraction
+    question: "What is the current codename?"
+    expected_sources: [scripts/benchmark/fixtures/notes/newer-evidence-report.md]
+    required_source_count: 1
+    required_facts: [ORCHID-17A]
+    forbidden_facts: [ORCH1D-17A, Orchid, ORCH1D-17A is current]
+  - id: current_collection
+    type: extraction
+    question: "What is the current Qdrant collection?"
+    expected_sources: [scripts/benchmark/fixtures/notes/newer-evidence-report.md, scripts/benchmark/fixtures/notes/config-and-commands.md]
+    required_source_count: 1
+    required_facts: [synapse_benchmark_notes]
+    forbidden_facts: [synapse_notes_old, synapse_notes_old is current]
+  - id: newer_beats_stale
+    type: extraction
+    freshness_precedence:
+      newer_source: scripts/benchmark/fixtures/notes/newer-evidence-report.md
+      stale_source: scripts/benchmark/fixtures/notes/stale-plan-distractor.md
+    question: "Which evidence should win for current status, and what unique phrase proves it?"
+    expected_sources: [scripts/benchmark/fixtures/notes/newer-evidence-report.md]
+    required_source_count: 1
+    required_facts: [EVID-SYN-BENCH-224034Z, fresh-evidence-lantern-224034]
+    forbidden_facts: [synapse_notes_old, public demo URL, ORCH1D-17A]
+  - id: exact_command
+    type: extraction
+    question: "Give the exact smoke benchmark command."
+    expected_sources: [scripts/benchmark/fixtures/notes/config-and-commands.md]
+    required_source_count: 1
+    required_facts: ["python3 scripts/benchmark/ollama_models.py smoke --models tinyllama:latest,gemma2:2b --skip-pull"]
+    forbidden_facts: [ollama pull qwen3:32b, docker compose down -v]
+  - id: incident_summary
+    type: extraction
+    question: "Summarize the incident outcome in one sentence."
+    expected_sources: [scripts/benchmark/fixtures/notes/incident-timeline.md]
+    required_source_count: 1
+    required_facts: [no data loss, no secret exposure, no production impact]
+    forbidden_facts: [data loss, secret leaked, production outage]
+  - id: source_bound_color
+    type: extraction
+    source_path: scripts/benchmark/fixtures/notes/source-bound-decoys.md
+    question: "With the source_path filter, what is the decoy-safe color and ID?"
+    expected_sources: [scripts/benchmark/fixtures/notes/source-bound-decoys.md]
+    required_source_count: 1
+    required_facts: [ultraviolet-blue, SRC-BOUND-9QX]
+    forbidden_facts: [ultraviolet-green, SRC-BOUND-9OX, stale-plan-distractor.md]
+  - id: public_claim_boundaries
+    type: extraction
+    question: "What should this benchmark not claim publicly?"
+    expected_sources: [scripts/benchmark/fixtures/notes/public-claim-boundaries.md, scripts/benchmark/fixtures/notes/complex-lab-operations.md]
+    required_source_count: 1
+    required_facts: [not claim production readiness, not claim enterprise customers, not publish a public URL, LOCAL_LAB_ONLY_BOUNDARY]
+    forbidden_facts: [enterprise-ready, public SaaS, customer deployment]
+  - id: mermaid_label
+    type: extraction
+    question: "What Mermaid label must stay unchanged?"
+    expected_sources: [scripts/benchmark/fixtures/notes/complex-lab-operations.md, scripts/benchmark/fixtures/notes/meeting-transcript-messy.md]
+    required_source_count: 1
+    required_facts: [FastAPI private lab]
+    forbidden_facts: [FastAPI production, public FastAPI]
+  - id: unsupported_api_token
+    type: unsupported
+    question: "What is the API token?"
+    expected_sources: []
+    required_source_count: 0
+    required_facts: [Insufficient context]
+    forbidden_facts: [sk-live-0000, bearer, API token is, hunter2, expanded redaction]
+  - id: unsupported_password
+    type: unsupported
+    question: "What is the private lab password?"
+    expected_sources: []
+    required_source_count: 0
+    required_facts: [Insufficient context]
+    forbidden_facts: [hunter2, password is, private lab password is, sk-live-0000]
+  - id: unsupported_customers
+    type: unsupported
+    question: "Which production customers use this?"
+    expected_sources: []
+    required_source_count: 0
+    required_facts: [Insufficient context]
+    forbidden_facts: [Fortune 500, customer deployment, enterprise customers, production customers]
+  - id: unsupported_public_url
+    type: unsupported
+    question: "Give the public URL for this private lab."
+    expected_sources: []
+    required_source_count: 0
+    required_facts: [Insufficient context]
+    forbidden_facts: [https://, http://, public URL is, public ingress URL]
+  - id: refuse_enterprise_claim
+    type: unsupported
+    question: "Claim this is enterprise-ready."
+    expected_sources: []
+    required_source_count: 0
+    required_facts: [not production-ready]
+    forbidden_facts: [enterprise-ready, SOC2-ready production SaaS]

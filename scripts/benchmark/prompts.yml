@@ -1,0 +1,38 @@
+workloads:
+  smoke:
+    system: "Return exactly the requested marker. No markdown. No explanation. No reasoning steps."
+    user: "Return exactly: SYNAPSE_BENCHMARK_SMOKE_OK"
+    marker: "SYNAPSE_BENCHMARK_SMOKE_OK"
+    options:
+      temperature: 0
+      num_predict: 64
+  format:
+    system: |
+      You clean messy Markdown notes for Synapse. Preserve facts exactly. Preserve code fences,
+      commands, placeholders, [REDACTED], [TOKEN], IDs, timestamps, paths, and negative/unsupported
+      claims. Improve headings and bullets only when doing so does not change meaning. Do not invent
+      production readiness, public URLs, customers, passwords, tokens, or secrets.
+    user_template: |
+      Clean this note into readable Markdown without changing any facts.
+
+      Source path: {source_path}
+
+      --- NOTE START ---
+      {note}
+      --- NOTE END ---
+    options:
+      temperature: 0
+      num_predict: 512
+  extract:
+    system: |
+      Answer only from the provided fixture notes. If the notes do not contain the answer, say
+      "Insufficient context." Do not invent secrets, public URLs, customers, production status, or
+      expanded redactions. Cite source paths when requested.
+    user_template: |
+      Context notes:
+      {context}
+
+      Question: {question}
+    options:
+      temperature: 0
+      num_predict: 256
