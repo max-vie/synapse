@@ -1,0 +1,59 @@
+name: Real local stack proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_real_models:
+        description: "Type RUN_REAL_STACK to run on a self-hosted lab runner with a configured private .env"
+        required: true
+        default: ""
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+env:
+  # Private .env is expected outside the Git checkout so stale repo files
+  # cannot influence proof results.  The runner operator sets
+  # SYNAPSE_ENV_FILE to the absolute path of a private .env kept in a
+  # durable directory (e.g. ~/synapse-env/.env or /opt/synapse/.env).
+  SYNAPSE_ENV_FILE: ${{ vars.SYNAPSE_ENV_FILE }}
+
+jobs:
+  real-local-stack-proof:
+    name: real-local-stack-proof
+    if: ${{ github.event.inputs.confirm_real_models == 'RUN_REAL_STACK' }}
+    # This proof is intentionally self-hosted only. It needs a private .env
+    # with a real Wiki.js API token and real Ollama model cache; GitHub-hosted
+    # runners cannot create that token from a fresh Wiki.js install.
+    runs-on: [self-hosted, synapse-real-stack]
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        # Pinned to actions/checkout v4.3.1 for supply-chain hardening.
+        # The private .env lives outside the checkout at $SYNAPSE_ENV_FILE
+        # so stale files from prior runs are always removed.
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Verify private real-stack environment is configured
+        run: |
+          if [ -z "${SYNAPSE_ENV_FILE:-}" ] || [ ! -f "$SYNAPSE_ENV_FILE" ]; then
+            echo "SYNAPSE_ENV_FILE must point to an existing private .env outside the checkout" >&2
+            echo "Set the SYNAPSE_ENV_FILE repository variable to the absolute path of the private .env." >&2
+            exit 1
+          fi
+          if grep -Eq '^WIKIJS_API_TOKEN=(|replace-after-wikijs-admin-setup)$' "$SYNAPSE_ENV_FILE"; then
+            echo "WIKIJS_API_TOKEN must be configured with a real private token" >&2
+            exit 1
+          fi
+          if grep -Eiq 'mock' "$SYNAPSE_ENV_FILE"; then
+            echo "real-stack proof must not use mock configuration" >&2
+            exit 1
+          fi
+
+      - name: Run real local stack proof
+        run: make real-local-stack-proof
