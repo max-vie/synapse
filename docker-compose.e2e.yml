@@ -114,6 +114,12 @@ services:
       DB_PASS: ${WIKIJS_DB_PASSWORD}
       DB_NAME: ${WIKIJS_DB_NAME:-wiki}
       NODE_OPTIONS: --no-deprecation
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
 volumes:
   qdrant-data: null
   ollama-data: null

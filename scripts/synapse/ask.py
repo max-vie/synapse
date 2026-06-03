@@ -478,13 +478,6 @@ def extractive_answer(ctx: Mapping[str, Any]) -> str:
         quote = re.sub(r"\s+", " ", str(source.get("quoted_support") or "")).strip()
         if not quote:
             continue
-        quote_lower = quote.casefold()
-        if "public" in question_lower and "url" in question_lower and "no public url" in quote_lower:
-            quote = "There is no public URL."
-        elif "boundary" in question_lower and "local lab automation" in quote_lower and "not production-ready" in quote_lower:
-            quote = "Synapse is local lab automation only, not production-ready."
-        elif any(term in question_lower for term in ("api token", "credential", "token")) and ("[redacted]" in quote_lower or "no real token" in quote_lower):
-            quote = "No real token is present in this note; secrets and API tokens stay [REDACTED]."
         quote = quote.rstrip()
         citation = f"[{index}]"
         if quote.endswith(citation):

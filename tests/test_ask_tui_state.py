@@ -295,7 +295,7 @@ class TestUnifiedNoteCommandBehavior:
     def test_line_mode_local_notes_command(self, tmp_path):
         notes_dir = tmp_path / "vault"
         notes_dir.mkdir()
-        (notes_dir / " ospf.md").write_text("# OSPF\n", encoding="utf-8")
+        (notes_dir / "ospf.md").write_text("# OSPF\n", encoding="utf-8")
 
         prompts = iter(["/local-notes", "/quit"])
         written = []
@@ -304,10 +304,11 @@ class TestUnifiedNoteCommandBehavior:
             input_func=lambda _: next(prompts),
             output_func=written.append,
             use_color=False,
+            vault_path=str(notes_dir),
         )
         joined = "\n".join(written)
-        # Local vault listing should show the vault label
-        assert "Demo vault" in joined or "no Markdown notes" in joined or " ospf.md" in joined
+        assert "Configured vault" in joined
+        assert "ospf.md" in joined
 
 
 class TestUnifiedSubmitBehavior:

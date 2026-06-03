@@ -26,7 +26,10 @@ from .upstream import UpstreamError
 
 # Single source of truth: the VERSION file at the repo root.
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-_SYNAPSE_VERSION = (_REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+try:
+    _SYNAPSE_VERSION = (_REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+except FileNotFoundError:
+    _SYNAPSE_VERSION = "0.1.0-dev"
 
 app = FastAPI(title="Synapse API", version=_SYNAPSE_VERSION)
 

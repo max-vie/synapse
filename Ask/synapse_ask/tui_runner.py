@@ -105,10 +105,11 @@ def add_indexed_notes_message(
 def add_local_notes_message(
     state: dict[str, object],
     query: str,
+    vault_path: str | None = None,
 ) -> None:
     # /local-notes always browses the local vault, regardless of webhook or
     # dry-run state. This is the safe offline-friendly command.
-    vault_root, label = resolve_vault()
+    vault_root, label = resolve_vault(vault_path)
     local_notes = find_available_notes(vault_root, query=query)
     add_tui_message(state, "system", format_local_notes(local_notes, label, vault_root))
     state["status"] = f"Found {len(local_notes)} local note(s)" if local_notes else "No local notes found"
@@ -199,6 +200,7 @@ def run_curses_tui(
     exact_run_id: str = "",
     dry_run_enabled: bool = False,
     debug: bool = False,
+    vault_path: str | None = None,
 ) -> int:
     # The real app loop is deliberately boring: draw current state, read one
     # key, turn that key into an action, then handle only the action here.
@@ -223,7 +225,7 @@ def run_curses_tui(
                 state["status"] = "Request failed"
         if action and action.get("action") == "local-notes":
             try:
-                add_local_notes_message(state, str(action.get("query") or ""))
+                add_local_notes_message(state, str(action.get("query") or ""), vault_path)
             except Exception as exc:  # noqa: BLE001
                 add_tui_message(state, "error", f"Local vault error: {exc}")
                 state["status"] = "Local vault error"
@@ -262,6 +264,7 @@ def run_line_tui(
     exact_run_id: str = "",
     dry_run_enabled: bool = False,
     debug: bool = False,
+    vault_path: str | None = None,
 ) -> int:
     # This is both a fallback for machines without curses and the test seam for
     # the interactive path. It is not fancy, but it lets CI exercise the same
@@ -333,7 +336,7 @@ def run_line_tui(
                     add_tui_message(state, "error", f"Request failed: {exc}")
             if action.get("action") == "local-notes":
                 try:
-                    add_local_notes_message(state, str(action.get("query") or ""))
+                    add_local_notes_message(state, str(action.get("query") or ""), vault_path)
                 except Exception as exc:  # noqa: BLE001
                     add_tui_message(state, "error", f"Local vault error: {exc}")
             messages = state.get("messages")
@@ -368,6 +371,7 @@ def run_tui(
     exact_run_id: str = "",
     dry_run_enabled: bool = False,
     debug: bool = False,
+    vault_path: str | None = None,
 ) -> int:
     # Tests pass fake input/output functions, real users get curses when it is
     # available, and CI still has a line-mode escape hatch for known init
@@ -386,6 +390,7 @@ def run_tui(
         exact_run_id=exact_run_id,
         dry_run_enabled=dry_run_enabled,
         debug=debug,
+        vault_path=vault_path,
     )
     if input_func is not None or output_func is not None:
         return run_line_tui(
