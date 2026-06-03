@@ -14,10 +14,10 @@ else
   echo "  ✓ docker  $(docker --version 2>&1 | head -1)"
 fi
 
-if docker compose version >/dev/null 2>&1; then
-  echo "  ✓ compose $(docker compose version 2>&1 | head -1)"
+if docker compose version >/dev/null 2>&1 || docker compose --version >/dev/null 2>&1; then
+  echo "  ✓ compose $(docker compose version 2>&1 | head -1 || docker compose --version 2>&1 | head -1)"
 elif command -v docker-compose >/dev/null 2>&1; then
-  echo "  ✓ compose $(docker-compose version 2>&1 | head -1)"
+  echo "  ✓ compose $(docker-compose --version 2>&1 | head -1)"
 else
   echo "  ✗ docker compose (or docker-compose) is not installed." >&2
   missing=1

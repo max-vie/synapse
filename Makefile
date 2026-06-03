@@ -1,4 +1,4 @@
-.PHONY: help setup demo check test validate lab-up configure lab-down lab-status lab-logs proof \
+.PHONY: help setup demo install check test validate lab-up configure lab-down lab-status lab-logs proof \
 	mocked-fastapi-qdrant-e2e ci-e2e real-local-stack-proof clean remove \
 	public-hygiene scan-removed-publisher doc-links update-check start-synapse
 
@@ -32,9 +32,12 @@ setup:
 demo:
 	$(PYTHON) scripts/demo.py
 
-check: test validate public-hygiene scan-removed-publisher doc-links
+install:
+	$(PYTHON) -m pip install -r requirements/dev.txt
 
-test:
+check: install test validate public-hygiene scan-removed-publisher doc-links
+
+test: install
 	$(PYTHON) -m pytest -q
 
 validate:

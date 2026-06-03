@@ -26,7 +26,7 @@ declare -A CHEALTH
 while IFS=$'\t' read -r name state health; do
   CSTATE["$name"]="$state"
   CHEALTH["$name"]="$health"
-done < <(compose --profile full ps --format '{{.Name}}\t{{.State}}\t{{.Health}}' 2>/dev/null | sed 's/^synapse-e2e-//' || true)
+done < <(compose --profile full ps --format '{{.Name}}\t{{.State}}\t{{.Health}}' 2>/dev/null | sed 's/^synapse-e2e-//; s/-[0-9]*$//' || true)
 
 # --- per-service status report ---
 printf '%-20s %-10s %-12s %-8s %s\n' "SERVICE" "STATE" "HEALTH" "HTTP" "ENDPOINT"

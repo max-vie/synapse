@@ -7,7 +7,7 @@ COMPOSE_FILE="${SYNAPSE_COMPOSE_FILE:-$ROOT/docker-compose.e2e.yml}"
 
 compose() {
   local base=()
-  if docker compose version >/dev/null 2>&1; then
+  if docker compose version >/dev/null 2>&1 || docker compose --version >/dev/null 2>&1; then
     base=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
   elif command -v docker-compose >/dev/null 2>&1; then
     base=(docker-compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")

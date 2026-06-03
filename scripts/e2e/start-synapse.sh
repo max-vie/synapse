@@ -3,6 +3,9 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 load_env
 
+echo "📦 Building Synapse image if needed ..."
+docker build -t synapse-service:local . 2>/dev/null || true
+
 echo "🚀 Starting Synapse service with profile 'full' ..."
 compose --profile full up -d --force-recreate synapse-service
 
