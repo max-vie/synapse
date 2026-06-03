@@ -95,7 +95,7 @@ This prevents duplicate-index buildup when the same note is edited and reprocess
 The lab binds browser/API services to localhost by default:
 
 ```text
-http://localhost:8080   Synapse API
+http://localhost:15515   Synapse API
 http://localhost:3000   Wiki.js
 http://localhost:6333   Qdrant
 http://localhost:11434  Ollama
