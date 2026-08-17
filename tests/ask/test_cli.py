@@ -1,7 +1,6 @@
 """Tests for Synapse Ask CLI argument parsing and dispatch."""
 
 import json
-from pathlib import Path
 
 import pytest
 

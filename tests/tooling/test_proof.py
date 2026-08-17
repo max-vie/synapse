@@ -35,7 +35,7 @@ def test_complex_suite_is_public_safe_and_adversarial():
 def test_redaction_removes_tokens_passwords_and_private_networks():
     private_ip = ".".join(("192", "168", "1", "20"))
     fake_api_key = "abcdef" + "123456"
-    text = f"Bearer abc123 password is hunter2 api_" + f"key={fake_api_key} http://{private_ip}"
+    text = "Bearer abc123 password is hunter2 api_" + f"key={fake_api_key} http://{private_ip}"
     redacted = redact_sensitive(text)
     assert "abc123" not in redacted
     assert "hunter2" not in redacted

@@ -10,7 +10,7 @@ ASK_DIR = Path(__file__).resolve().parent
 if str(ASK_DIR) not in sys.path:
     sys.path.insert(0, str(ASK_DIR))
 
-from synapse_ask.cli import main
+from synapse_ask.cli import main  # noqa: E402
 
 
 if __name__ == "__main__":

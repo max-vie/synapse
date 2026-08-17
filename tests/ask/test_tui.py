@@ -1,11 +1,10 @@
 import curses
 import time
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from synapse_ask import cli as ask_cli  # noqa: E402
+from synapse_ask import APP_VERSION, cli as ask_cli  # noqa: E402
 from synapse_ask import tui_render as ask_tui_render  # noqa: E402
 from synapse_ask import tui_runner as ask_tui_runner  # noqa: E402
 from synapse_ask import formatting as ask_formatting  # noqa: E402
@@ -286,7 +285,7 @@ def test_tui_draws_logo_right_info_startup_card_status_prompt_and_footer():
     ask_tui_render.draw_tui(screen, state, webhook_url="")
 
     rendered = screen.rendered_text
-    assert "Synapse Ask v0.4.0" in rendered
+    assert f"Synapse Ask v{APP_VERSION}" in rendered
     assert "Live RAG workflow" in rendered
     assert "Ask a question from your notes" in rendered
     assert "Answers show Markdown sources" in rendered
@@ -359,7 +358,7 @@ def test_tui_startup_card_centers_logo_left_of_middle_divider_and_info_right():
 
     rendered_calls = [call for call in screen.calls if call[0] == "addstr"]
     rendered_text = "\n".join(call[3] for call in rendered_calls)
-    card_call = next(call for call in rendered_calls if "Synapse Ask v0.4.0" in call[3])
+    card_call = next(call for call in rendered_calls if f"Synapse Ask v{APP_VERSION}" in call[3])
     card_top, card_left, card_width = card_call[1], card_call[2], len(card_call[3])
     divider_x = card_left + card_width // 2
     logo_first = ask_tui_render.SYNAPSE_LOGO.splitlines()[0]
@@ -403,7 +402,7 @@ def test_tui_startup_layout_is_centered_in_wide_terminal():
 
     ask_tui_render.draw_tui(screen, state, webhook_url="")
 
-    card_calls = [call for call in screen.calls if call[0] == "addstr" and "Synapse Ask v0.4.0" in call[3]]
+    card_calls = [call for call in screen.calls if call[0] == "addstr" and f"Synapse Ask v{APP_VERSION}" in call[3]]
     assert card_calls
     card_left = card_calls[0][2]
     card_width = len(card_calls[0][3])
@@ -455,7 +454,7 @@ def test_tui_draws_answer_transcript_after_chat_activity():
     ask_tui_render.draw_tui(screen, state, webhook_url="https://private.invalid/webhook")
 
     rendered = screen.rendered_text
-    assert "Synapse Ask v0.4.0" in rendered
+    assert f"Synapse Ask v{APP_VERSION}" in rendered
     assert "Mode: LIVE" not in rendered
     assert "Status:" not in rendered
     assert "You: what algorithm is used in ospf?" not in rendered
@@ -647,7 +646,6 @@ class TestRightPanelState:
     def test_after_real_answer_spinner_is_not_in_preview(self):
         # If the last assistant message is a spinner but a previous one was a
         # real answer, the preview should show the real answer, not the spinner.
-        screen = FakeScreen(height=24, width=100)
         state = ask_tui_state.new_tui_state()
         ask_tui_state.add_tui_message(state, "user", "what is ospf?")
         ask_tui_state.add_tui_message(state, "assistant", "OSPF is a link-state routing protocol.")

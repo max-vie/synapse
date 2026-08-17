@@ -1,5 +1,28 @@
-from scripts.benchmark.constants import STANDARD_EXTRACT_QUESTION_IDS, STANDARD_FORMAT_NOTE_PATHS
+import argparse
+import json
+from pathlib import Path
+
+import yaml
+
+from scripts.benchmark import ollama_models
+from scripts.benchmark.constants import (
+    MATRIX_PATH,
+    NOTES_DIR,
+    QUESTIONS_PATH,
+    STANDARD_EXTRACT_QUESTION_IDS,
+    STANDARD_FORMAT_NOTE_PATHS,
+    STANDARD_SUITE_ID,
+)
+from scripts.benchmark.ollama_models import standard_suite_spec
 from scripts.benchmark.report import comparable_standard_records, display_size, redact, render_markdown, summarize_model_records
+from scripts.proof.scoring import (
+    detect_forbidden,
+    detect_redaction_expansion,
+    detect_required,
+    detect_secret_invention,
+    is_insufficient_answer,
+    score_answer,
+)
 
 STANDARD_NOTE_PATHS = list(STANDARD_FORMAT_NOTE_PATHS)
 STANDARD_QUESTION_IDS = list(STANDARD_EXTRACT_QUESTION_IDS)
@@ -400,16 +423,6 @@ def test_render_uses_workflow_selection_to_classify_failed_complex_runs():
 
     assert "`failed-before-evidence`" not in fresh_section
     assert "`failed-before-evidence`" in complex_section
-from scripts.proof.scoring import (
-    detect_forbidden,
-    detect_redaction_expansion,
-    detect_required,
-    detect_secret_invention,
-    is_insufficient_answer,
-    score_answer,
-)
-
-
 def test_required_and_forbidden_detection():
     text = "Current codename ORCHID-17A uses synapse_benchmark_notes."
     found, missing = detect_required(text, ["ORCHID-17A", "synapse_benchmark_notes", "missing fact"])
@@ -612,12 +625,6 @@ def test_secret_and_redaction_detection():
     assert detect_redaction_expansion("expanded redaction: abc123")
 
 
-import argparse
-import json
-
-from scripts.benchmark import ollama_models
-
-
 class FakeResponse:
     def __init__(self, body: str):
         self.body = body.encode("utf-8")
@@ -715,20 +722,6 @@ def test_ollama_redact_hides_172_private_networks_in_errors():
     assert private_ip not in text
     assert "172.16.x.x" in text
 
-
-from pathlib import Path
-
-import yaml
-
-from scripts.benchmark.constants import (
-    MATRIX_PATH,
-    NOTES_DIR,
-    QUESTIONS_PATH,
-    STANDARD_EXTRACT_QUESTION_IDS,
-    STANDARD_FORMAT_NOTE_PATHS,
-    STANDARD_SUITE_ID,
-)
-from scripts.benchmark.ollama_models import standard_suite_spec
 
 MATRIX = MATRIX_PATH
 QUESTIONS = QUESTIONS_PATH

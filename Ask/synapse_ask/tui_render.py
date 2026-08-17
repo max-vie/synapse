@@ -10,8 +10,8 @@ try:
 except ImportError:  # pragma: no cover - curses is available on the target Linux host.
     curses = None  # type: ignore[assignment]
 
-from .formatting import SYNAPSE_LOGO, display_answer_text, format_sources, terminal_plain_text
-from .tui_state import SLASH_OPTIONS, slash_option_lines
+from .formatting import SYNAPSE_LOGO, format_sources, terminal_plain_text
+from .tui_state import slash_option_lines
 from .version import APP_VERSION
 
 TUI_ACCENT_PAIR = 1

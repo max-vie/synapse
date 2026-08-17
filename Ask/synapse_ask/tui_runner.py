@@ -14,10 +14,10 @@ except ImportError:  # pragma: no cover - curses is available on the target Linu
     curses = None  # type: ignore[assignment]
 
 from .client import ask_question, list_indexed_notes
-from .formatting import display_answer_text, format_one_shot_output, is_error_result, normalize_rag_result, render_tui_screen, result_sources
+from .formatting import display_answer_text, is_error_result, normalize_rag_result, render_tui_screen, result_sources
 from .notes import find_available_notes, format_local_notes, resolve_vault
 from .tui_render import draw_tui, init_tui_colors
-from .tui_state import KEY_ENTER, add_tui_message, apply_tui_command, handle_tui_key, new_tui_state, remember_tui_answer, replace_tui_message
+from .tui_state import add_tui_message, apply_tui_command, handle_tui_key, new_tui_state, remember_tui_answer, replace_tui_message
 
 # Animation constants — only the runner needs these, not the state module.
 THINKING_SPINNER_FRAMES = ("◜", "◝", "◞", "◟")

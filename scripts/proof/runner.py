@@ -23,7 +23,6 @@ from scripts.proof.redaction import redact_sensitive  # noqa: E402
 from scripts.proof.scenarios import (  # noqa: E402
     COMPLEX_SUITE_ID,
     OSPF_SUITE_ID,
-    PROOF_NOTE_DIR,
     REAL_LOCAL_STACK_SUITE_ID,
     build_complex_suite,
     build_ospf_suite,

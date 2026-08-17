@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import sys
 import textwrap
 from pathlib import Path
 
 from .client import ask_question
 from .config import load_dotenv
-from .formatting import format_one_shot_output, normalize_rag_result
+from .formatting import format_one_shot_output
 from .tui_runner import run_tui
 from .version import APP_VERSION
 

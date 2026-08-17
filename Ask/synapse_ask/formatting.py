@@ -7,7 +7,6 @@ import re
 import shutil
 import textwrap
 
-from .version import APP_VERSION
 
 SYNAPSE_LOGO = r"""
  ____ __   __ _   _    _    ____  ____  _____

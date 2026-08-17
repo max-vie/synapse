@@ -33,7 +33,6 @@ import shutil
 import signal
 import socket
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
