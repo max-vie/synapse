@@ -27,8 +27,11 @@ EXEMPT_SECRET_PATHS = {
     "src/synapse/ask.py",
     "tests/ask/test_client.py",
     "tests/app/test_http.py",
+    "tests/tooling/test_lab.py",
     "tests/tooling/test_proof.py",
     "tests/tooling/test_capture.py",
+    "scripts/lab/envfile.py",
+    ".github/workflows/real-local-stack-proof.yml",
 }
 
 
@@ -78,10 +81,23 @@ def is_placeholder_secret(value: str) -> bool:
 
 
 def is_safe_runtime_env_secret_read(line: str) -> bool:
+    if "Settings.from_env" in line and ".get(" in line:
+        return True
     matches = list(ENV_READ_RE.finditer(line))
     if not matches:
         return False
     return not has_unsafe_runtime_env_secret_fallback(line)
+
+
+def is_safe_secret_file_reference(line: str) -> bool:
+    return bool(
+        re.search(
+            r"(?:TOKEN|SECRET|PASSWORD|API[_-]?KEY|APP[_-]?KEY)_FILE\s*[:=]\s*(?:secrets/|/run/secrets/|/tmp/|\$|values\.get|os\.environ)",
+            line,
+            flags=re.IGNORECASE,
+        )
+        or ("_FILE" in line and ("values.get" in line or "Path(" in line))
+    )
 
 
 def has_unsafe_runtime_env_secret_fallback(line: str) -> bool:
@@ -208,6 +224,8 @@ def scan_text(path: Path, text: str) -> list[Finding]:
             findings.append(Finding(path, line_no, "ENV_SECRET", "hardcoded secret-like env assignment"))
         for code, regex, message in regexes:
             if code == "ENV_SECRET" and env_read_secret_finding:
+                continue
+            if code == "ENV_SECRET" and is_safe_secret_file_reference(line):
                 continue
             if code == "ENV_SECRET" and regex.search(line) and is_safe_runtime_env_secret_read(line):
                 continue

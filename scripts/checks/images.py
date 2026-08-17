@@ -43,13 +43,16 @@ OFFLINE_LATEST = {
 }
 
 
-def parse_image_ref(image: str) -> tuple[str, str]:
-    if ":" not in image.rsplit("/", 1)[-1]:
+def parse_image_ref(image: str) -> tuple[str, str, str | None]:
+    reference, separator, digest = image.partition("@")
+    if ":" not in reference.rsplit("/", 1)[-1]:
         raise ValueError(f"image is not tag-pinned: {image}")
-    repo, tag = image.rsplit(":", 1)
+    repo, tag = reference.rsplit(":", 1)
     if tag == "latest":
         raise ValueError(f"image must not use latest tag: {image}")
-    return repo, tag
+    if separator and (not digest.startswith("sha256:") or len(digest) != len("sha256:") + 64):
+        raise ValueError(f"image digest must be a sha256 digest: {image}")
+    return repo, tag, digest or None
 
 
 def compose_image_default(compose: dict[str, Any], source: ImageSource) -> str:
@@ -85,20 +88,21 @@ def build_report(compose_file: Path, offline_fixture: bool = False) -> dict[str,
     outdated = []
     for source in IMAGE_SOURCES:
         pinned = compose_image_default(compose, source)
-        repo, tag = parse_image_ref(pinned)
+        repo, tag, digest = parse_image_ref(pinned)
         latest_release = None
         latest_image = pinned
         current = True
         if source.repo:
             latest_release = OFFLINE_LATEST[source.name] if offline_fixture else latest_github_release_tag(source)
             latest_tag = source.tag_to_image_tag(latest_release)
-            latest_image = f"{repo}:{latest_tag}"
-            current = tag == latest_tag
+            latest_image = f"{repo}:{latest_tag}" + (f"@{digest}" if digest else "")
+            current = tag == latest_tag and digest is not None
         item = {
             "name": source.name,
             "service": source.service,
             "env_name": source.env_name,
             "pinned": pinned,
+            "digest": digest,
             "latest_release": latest_release,
             "expected_image": latest_image,
             "current": current,

@@ -46,10 +46,28 @@ jobs:
             echo "Set the SYNAPSE_ENV_FILE repository variable to the absolute path of the private .env." >&2
             exit 1
           fi
-          if grep -Eq '^WIKIJS_API_TOKEN=(|replace-after-wikijs-admin-setup)$' "$SYNAPSE_ENV_FILE"; then
-            echo "WIKIJS_API_TOKEN must be configured with a real private token" >&2
-            exit 1
-          fi
+          python - "$SYNAPSE_ENV_FILE" <<'PY'
+          import pathlib
+          import sys
+
+          env_path = pathlib.Path(sys.argv[1]).resolve()
+          values = {}
+          for line in env_path.read_text(encoding="utf-8").splitlines():
+              line = line.strip()
+              if line and not line.startswith("#") and "=" in line:
+                  key, value = line.split("=", 1)
+                  values[key.strip()] = value.strip().strip("\"'")
+          token_file = values.get("WIKIJS_API_TOKEN_FILE", "")
+          if token_file:
+              token_path = pathlib.Path(token_file)
+              if not token_path.is_absolute():
+                  token_path = env_path.parent / token_path
+              token = token_path.read_text(encoding="utf-8").strip() if token_path.is_file() else ""
+          else:
+              token = values.get("WIKIJS_API_TOKEN", "")
+          if not token or token.startswith("replace-"):
+              raise SystemExit("WIKIJS_API_TOKEN must be configured with a real private token or token file")
+          PY
           if grep -Eiq 'mock' "$SYNAPSE_ENV_FILE"; then
             echo "real-stack proof must not use mock configuration" >&2
             exit 1
