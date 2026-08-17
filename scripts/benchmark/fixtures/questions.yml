@@ -4,7 +4,7 @@ exact_preserve_blocks:
   - source_path: scripts/benchmark/fixtures/notes/complex-lab-operations.md
     text: "curl -sS -H 'X-Synapse-Benchmark: [TOKEN]' http://127.0.0.1:15515/webhook/benchmark-note > /tmp/synapse-bench.json"
   - source_path: scripts/benchmark/fixtures/notes/config-and-commands.md
-    text: "python3 scripts/benchmark/ollama_models.py smoke --models tinyllama:latest,gemma2:2b --skip-pull"
+    text: "python3 -m scripts.benchmark run --models tinyllama:latest,gemma2:2b --skip-pull"
   - source_path: scripts/benchmark/fixtures/notes/config-and-commands.md
     text: "allow_public_ingress = false"
   - source_path: scripts/benchmark/fixtures/notes/incident-timeline.md
@@ -68,7 +68,7 @@ questions:
     question: "Give the exact smoke benchmark command."
     expected_sources: [scripts/benchmark/fixtures/notes/config-and-commands.md]
     required_source_count: 1
-    required_facts: ["python3 scripts/benchmark/ollama_models.py smoke --models tinyllama:latest,gemma2:2b --skip-pull"]
+    required_facts: ["python3 -m scripts.benchmark run --models tinyllama:latest,gemma2:2b --skip-pull"]
     forbidden_facts: [ollama pull qwen3:32b, docker compose down -v]
   - id: incident_summary
     type: extraction

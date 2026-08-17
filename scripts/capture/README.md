@@ -5,7 +5,7 @@
 Regenerate the README GIF from the repository root:
 
 ```bash
-python3 scripts/capture/capture_ask_gif.py
+python3 -m scripts.capture
 ```
 
 Output:

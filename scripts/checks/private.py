@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-"""Validate Synapse repository artifacts for public-safe sharing.
+"""Validate repository artifacts for public-safe sharing.
 
 Checks performed:
 - Text artifacts do not contain stale workflow-runtime dependencies.
@@ -26,9 +25,11 @@ SKIP_DIRS = {".git", ".pytest_cache", "__pycache__", ".venv", "venv", "node_modu
 
 EXEMPT_SECRET_PATHS = {
     "scripts/capture/capture_ask_gif.py",
-    "scripts/synapse/ask.py",
-    "tests/test_ask_http_sanitization.py",
-    "tests/test_synapse_service_fastapi.py",
+    "src/synapse/ask.py",
+    "tests/ask/test_client.py",
+    "tests/app/test_http.py",
+    "tests/tooling/test_proof.py",
+    "tests/tooling/test_capture.py",
 }
 
 
@@ -163,7 +164,7 @@ def iter_text_files(root: Path) -> Iterable[Path]:
                 continue
             yield path
             continue
-        if path.suffix in TEXT_SUFFIXES or path.name in {".gitignore", "SECURITY.md", "README.md", "Makefile"}:
+        if path.suffix in TEXT_SUFFIXES or path.name in {".gitignore", "README.md", "Makefile"}:
             yield path
 
 
@@ -226,6 +227,25 @@ def validate_repo(root: Path) -> list[Finding]:
         except UnicodeDecodeError:
             continue
         findings.extend(scan_text(path, text))
+    return findings
+
+
+def validate_files(root: Path, files: Iterable[Path]) -> list[Finding]:
+    """Validate an existing candidate set supplied by the checks interface."""
+    findings: list[Finding] = []
+    for path in files:
+        try:
+            rel_parts = path.relative_to(root).parts
+        except ValueError:
+            rel_parts = path.parts
+        if any(part in SKIP_DIRS for part in rel_parts):
+            continue
+        if path.suffix not in TEXT_SUFFIXES and path.name not in {".gitignore", "README.md", "Makefile"}:
+            continue
+        try:
+            findings.extend(scan_text(path, path.read_text(encoding="utf-8")))
+        except UnicodeDecodeError:
+            continue
     return findings
 
 

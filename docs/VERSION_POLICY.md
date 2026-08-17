@@ -29,7 +29,7 @@ The check compares reviewed Compose image defaults with upstream GitHub releases
 
 If a pin is stale:
 
-1. Update `docker-compose.e2e.yml` and the generated `.env` defaults in `scripts/e2e/setup.sh` together.
+1. Update `docker-compose.e2e.yml` and `.env.example` together.
 2. Run `docker manifest inspect` for each new image tag before starting the lab.
 3. Run `make lab-up` only in a disposable local lab or after accepting the service upgrade risk.
 4. Run the live proof with `make proof` after the stack starts.

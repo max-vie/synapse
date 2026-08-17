@@ -263,12 +263,6 @@ The reviewer demo is the safe preview path. It uses no Docker, no `.env`, no tok
 make demo
 ```
 
-or:
-
-```bash
-scripts/setup.sh --demo
-```
-
 Use this for a quick repository check. Use the explicit local lab flow when you want to prove the actual lab:
 
 ```bash

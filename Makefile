@@ -1,6 +1,5 @@
-.PHONY: help setup demo install check test validate lab-up configure lab-down lab-status lab-logs proof \
-	mocked-fastapi-qdrant-e2e ci-e2e real-local-stack-proof clean remove \
-	public-hygiene scan-removed-publisher doc-links update-check start-synapse
+.PHONY: help demo install check test lab-up configure lab-down lab-status lab-logs proof \
+	mocked-fastapi-qdrant-e2e real-local-stack-proof clean remove update-check start-synapse
 
 PYTHON ?= python3
 .DEFAULT_GOAL := help
@@ -15,7 +14,6 @@ help:
 		"  make demo        Run the no-network reviewer demo" \
 		"  make check       Run local release checks" \
 		"  make test        Run tests" \
-		"  make validate    Validate generated workflows and public safety" \
 		"  make lab-down    Stop the local lab without deleting data" \
 		"  make lab-status  Show lab service status" \
 		"  make lab-logs    Show lab service logs" \
@@ -25,76 +23,50 @@ help:
 		"  make remove     Remove all lab containers, volumes, .env, and local artifacts" \
 		"  make clean       Remove local benchmark output"
 
-setup:
-	@printf '%s\n' "Compatibility alias. Use the explicit flow: make lab-up, make configure, make proof."
-	$(MAKE) lab-up
-
 demo:
 	$(PYTHON) scripts/demo.py
 
 install:
-	$(PYTHON) -m pip install -r requirements/dev.txt
+	$(PYTHON) -m pip install -e ".[dev]"
 
-check: install test validate public-hygiene scan-removed-publisher doc-links
+check: install test
+	$(PYTHON) -m scripts.checks all
 
 test: install
 	$(PYTHON) -m pytest -q
 
-validate:
-	$(PYTHON) scripts/validate.py .
-
 lab-up:
-	@echo "==> Setting up .env and generating secrets ..."
-	scripts/e2e/setup.sh
-	@echo "==> Starting infrastructure services (qdrant, ollama, wikijs) ..."
-	scripts/e2e/start.sh
-	@echo "==> Pulling Ollama models ..."
-	scripts/e2e/pull-models.sh
-	@echo "==> Creating Qdrant collection (derives name from OLLAMA_EMBED_MODEL dimension) ..."
-	scripts/e2e/create-qdrant-collection.sh
-	@echo "==> Starting Synapse service (reads updated QDRANT_COLLECTION from .env) ..."
-	scripts/e2e/start-synapse.sh
+	$(PYTHON) -m scripts.lab up
 
 lab-down:
-	scripts/e2e/stop.sh
+	$(PYTHON) -m scripts.lab down
 
 lab-status:
-	scripts/e2e/status.sh
+	$(PYTHON) -m scripts.lab status
 
 lab-logs:
-	scripts/e2e/logs.sh
+	$(PYTHON) -m scripts.lab logs
 
 configure:
-	scripts/e2e/configure.sh
+	$(PYTHON) -m scripts.lab configure
 
-proof: configure
-	scripts/e2e/local-e2e-proof.sh
+proof:
+	$(PYTHON) -m scripts.lab proof
 
 mocked-fastapi-qdrant-e2e:
-	scripts/e2e/ci-e2e.sh
-
-ci-e2e: mocked-fastapi-qdrant-e2e
+	$(PYTHON) -m scripts.lab mocked-proof
 
 real-local-stack-proof:
-	scripts/e2e/real-local-stack-proof.sh
+	$(PYTHON) -m scripts.lab real-proof
 
 clean:
 	rm -rf .local-artifacts/benchmarks
 
 remove:
-	scripts/e2e/remove.sh
-
-public-hygiene:
-	$(PYTHON) scripts/public_hygiene.py .
-
-scan-removed-publisher:
-	$(PYTHON) scripts/check_removed_publisher.py .
-
-doc-links:
-	$(PYTHON) scripts/check_docs_links.py .
+	$(PYTHON) -m scripts.lab remove
 
 update-check:
-	$(PYTHON) scripts/check_image_versions.py --format text
+	$(PYTHON) -m scripts.checks images --format text
 
 start-synapse:
-	scripts/e2e/start-synapse.sh
+	$(PYTHON) -m scripts.lab start-service

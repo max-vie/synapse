@@ -20,7 +20,7 @@ allow_public_ingress = false
 
 exact command:
 ```bash
-python3 scripts/benchmark/ollama_models.py smoke --models tinyllama:latest,gemma2:2b --skip-pull
+python3 -m scripts.benchmark run --models tinyllama:latest,gemma2:2b --skip-pull
 ```
 
 Pasted terminal log:

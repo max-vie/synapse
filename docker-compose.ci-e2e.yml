@@ -3,12 +3,12 @@ services:
   mock-ollama:
     image: ${MOCK_OLLAMA_IMAGE:-python:3.13-slim}
     restart: unless-stopped
-    working_dir: /app/scripts/e2e
+    working_dir: /app/scripts/proof
     command: python mock_ollama.py --host '' --port 11435
     expose:
       - "11435"
     volumes:
-      - ./scripts/e2e:/app/scripts/e2e:ro
+      - ./scripts/proof:/app/scripts/proof:ro,Z
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:11435/api/tags', timeout=2)"]
       interval: 5s
@@ -34,7 +34,7 @@ services:
         condition: service_started
       mock-ollama:
         condition: service_healthy
-    working_dir: /app/scripts
+    working_dir: /app
     command: python -m synapse.service
     ports:
       - 127.0.0.1:${SYNAPSE_SERVICE_PORT:-6578}:8080
@@ -66,8 +66,6 @@ services:
       SYNAPSE_AUTH_DISABLED: 'false'
       SYNAPSE_ANSWER_VALIDATION: ${SYNAPSE_ANSWER_VALIDATION:-structural}
       RAG_QUOTE_OVERLAP_THRESHOLD: ${RAG_QUOTE_OVERLAP_THRESHOLD:-0.3}
-    volumes:
-      - ./scripts:/app/scripts:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=5)"]
       interval: 10s

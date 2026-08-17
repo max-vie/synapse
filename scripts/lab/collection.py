@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-"""Create the Qdrant collection that matches the active Ollama embedding model."""
+"""Ensure Qdrant matches the active Ollama embedding model."""
 from __future__ import annotations
 
 import argparse
@@ -13,6 +12,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
+from . import envfile
+
 PROBE_TEXT = "synapse vector dimension probe"
 DEFAULT_COLLECTION_BASE = "synapse_notes"
 DEFAULT_EMBED_MODEL = "nomic-embed-text"
@@ -22,30 +23,14 @@ RequestJson = Callable[[str, dict[str, Any] | None, str | None], dict[str, Any]]
 
 
 def load_dotenv(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    if not path.exists():
-        raise SystemExit(f"missing {path}; run make lab-up first")
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip().strip('"').strip("'")
-    return values
+    try:
+        return envfile.load(path)
+    except envfile.EnvFileError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def write_env_value(path: Path, key: str, value: str) -> None:
-    lines = path.read_text(encoding="utf-8").splitlines()
-    replacement = f"{key}={value}"
-    for index, line in enumerate(lines):
-        if line.startswith(f"{key}="):
-            if line == replacement:
-                return
-            lines[index] = replacement
-            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            return
-    lines.append(replacement)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    envfile.write_values(path, {key: value})
 
 
 def strip_base_url(value: str | None, fallback: str) -> str:

@@ -22,51 +22,17 @@ from scripts.benchmark.constants import (  # noqa: E402
     WORKFLOW_SCORE_WEIGHTS,
     is_public_benchmark_model,
 )
+from scripts.proof.redaction import redact_sensitive  # noqa: E402
 
 DEFAULT_REPORT = BENCHMARK_REPORT_PATH
 STANDARD_FORMAT_NOTE_COUNT = len(STANDARD_FORMAT_NOTE_PATHS)
 STANDARD_EXTRACT_QUESTION_COUNT = len(STANDARD_EXTRACT_QUESTION_IDS)
 REPORTABLE_KINDS = {"smoke", "format", "extract", "suite", "workflow", "pull"}
 
-TAKEAWAYS = {
-    "gemma3:27b": "high-quality opt-in pick: strong standard score and clean complex proof",
-    "gemma3:4b": "small fallback only; extraction score trails larger opt-in picks",
-    "gemma3:12b": "formats notes well, but extraction and boundary checks lag",
-    "devstral-small-2:24b": "accurate enough to test, but watch boundary overclaims",
-    "glm-4.7:latest": "standard-suite rerun underperformed earlier extract-only signal",
-    "gemma4:31b": "worth tracking, but below Gemma 3 27B on this suite",
-    "devstral-2:123b": "no payoff over 24B Devstral in this run; boundary risk remains",
-    "qwen3-coder-next:latest": "best `qwen3-coder` row here, but its live workflow hit HTTP 500",
-    "qwen2.5-coder:3b": "tempting small fallback, but it missed one complex boundary check",
-    "qwen2.5-coder:14b": "best Qwen/coder workhorse after the complex proof",
-    "gemma4:e4b": "fast live-proof pass, but only with tuned chat settings",
-    "qwen3.5:9b": "passed live proof, but extraction score keeps it behind the defaults",
-    "qwen3.6:27b": "passed complex proof, but it was slow and scored lower",
-    "qwen3.5:397b": "underperformed for size",
-    "qwen3-coder:480b": "latency cost did not buy enough Synapse accuracy",
-    "gpt-oss:120b": "large model, middling result here",
-    "gemini-3-flash-preview:latest": "weak smoke and grounded extraction in this harness",
-    "kimi-k2-thinking:latest": "failed the smoke check and struggled with formatting",
-    "kimi-k2.6:latest": "extraction quality was too weak for Ask",
-    "kimi-k2.5:latest": "extraction quality was too weak for Ask",
-    "minimax-m2.7:latest": "MiniMax stayed below the practical cutoff",
-    "minimax-m2.5:latest": "only 5/13 extraction checks scored; too risky for Ask",
-    "minimax-m2.1:latest": "extraction quality was too weak for Ask",
-    "minimax-m2:latest": "extraction quality was too weak for Ask",
-}
-
-
 def redact(text: str) -> str:
     text = text.replace(str(ROOT), "<REPO_ROOT>")
-    text = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._:/+-]+", r"\1[REDACTED]", text)
-    text = re.sub(r"sk-[A-Za-z0-9_-]{8,}", "sk-[REDACTED]", text)
-    text = re.sub(r"(?i)\b(password|passwd|secret)\s+(is)\s+\S+", r"\1 \2 [REDACTED]", text)
-    text = re.sub(r"(?i)(token|password|api[_-]?key)(\s*[=:]\s*)\S+", r"\1\2[REDACTED]", text)
     text = re.sub(r"(?i)([\"']?(?:token|password|api[_-]?key)[\"']?\s*[:=]\s*[\"']?)[^\"'\s,}]+", r"\1[REDACTED]", text)
-    text = re.sub(r"\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", "10.x.x.x", text)
-    text = re.sub(r"\b192\.168\.\d{1,3}\.\d{1,3}\b", "192.168.x.x", text)
-    text = re.sub(r"\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b", "172.16.x.x", text)
-    return text
+    return redact_sensitive(text)
 
 
 def latest_files(output_dir: Path, limit: int | None = None) -> list[Path]:
@@ -112,15 +78,7 @@ def md_code(value: Any) -> str:
 
 
 def takeaway(model: str) -> str:
-    if model in TAKEAWAYS:
-        return TAKEAWAYS[model]
-    if model.startswith("glm-"):
-        return "standard suite completed; no live proof is shown here"
-    if model.startswith("deepseek-"):
-        return "DeepSeek family row; useful for contrast, not the current pick"
-    if "coder" in model:
-        return "coder-family row; compare against the Qwen/coder workhorse"
-    return "standard-suite row only; no live proof is shown here"
+    return "Compare the recorded standard scores and live proof status."
 
 
 def _empty_record(name: str) -> dict[str, Any]:
@@ -330,8 +288,8 @@ def fmt_score(value: Any) -> str:
 
 def compact_command(command: str) -> str:
     command = redact(command)
-    command = command.replace("<REPO_ROOT>/scripts/benchmark/ollama_models.py ", "ollama_models.py ")
-    command = command.replace("scripts/benchmark/ollama_models.py ", "ollama_models.py ")
+    command = command.replace("<REPO_ROOT>/scripts/benchmark/ollama_models.py ", "python -m scripts.benchmark ")
+    command = command.replace("scripts/benchmark/ollama_models.py ", "python -m scripts.benchmark ")
     return command
 
 
@@ -519,7 +477,7 @@ def render_markdown(runs: list[dict[str, Any]]) -> str:
                 f"{md_cell(decision)} | {md_cell(why)} |"
             )
     else:
-        lines.append("No comparable recommendation yet. Run `python3 scripts/benchmark/ollama_models.py suite --models <tags> --skip-pull` to create ranked output.")
+        lines.append("No comparable recommendation yet. Run `python3 -m scripts.benchmark run --models <tags> --skip-pull` to create ranked output.")
     lines.append("")
     lines.append(
         "Do not treat the tuned rows as stock Ollama defaults. `gemma4:e4b` and `qwen3.5:9b` only made sense with the chat path used in the proof: "
@@ -564,7 +522,7 @@ def render_markdown(runs: list[dict[str, Any]]) -> str:
                 f"{fmt_score(rec.get('workflow_score'))} | {md_code(fresh_note)} | {md_cell(qdrant)} | {md_cell(duration)} | {md_cell(note)} |"
             )
     else:
-        lines.append("No live workflow proofs have been recorded yet. Run `python3 scripts/benchmark/workflow_top_models.py` after the model-selection backfill finishes.")
+        lines.append("No live workflow proofs have been recorded yet. Run `python3 -m scripts.benchmark workflow` after selecting models.")
     lines.append("")
 
     lines.append("## Complex live proof")
@@ -595,7 +553,7 @@ def render_markdown(runs: list[dict[str, Any]]) -> str:
             )
     else:
         lines.append(
-            "No complex live workflow proofs have been recorded yet. Run `python3 scripts/benchmark/workflow_top_models.py --proof-suite complex --models <tags> --skip-pull`."
+            "No complex live workflow proofs have been recorded yet. Run `python3 -m scripts.benchmark workflow --proof-suite complex --models <tags> --skip-pull`."
         )
     lines.append("")
 

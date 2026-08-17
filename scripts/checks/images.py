@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Check reviewed Docker image pins against upstream release metadata."""
 from __future__ import annotations
 
@@ -13,7 +12,7 @@ from typing import Any, Callable
 
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 @dataclass(frozen=True)

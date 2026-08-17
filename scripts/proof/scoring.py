@@ -1,4 +1,4 @@
-"""Deterministic scoring helpers for the Synapse benchmark harness."""
+"""Deterministic answer scoring shared by proof and benchmarks."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

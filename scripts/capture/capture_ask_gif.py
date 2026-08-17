@@ -42,6 +42,7 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_GIF = ROOT / "docs" / "assets" / "synapse-ask-real-tui-ospf.gif"
 ARTIFACT_DIR = ROOT / ".local-artifacts" / "capture"
+GENERATED_GIF = ARTIFACT_DIR / "synapse-ask-real-tui-ospf.generated.gif"
 RAW_MP4 = ARTIFACT_DIR / "synapse-ask-real-tui-ospf.raw.mp4"
 PALETTE = ARTIFACT_DIR / "synapse-ask-real-tui-ospf.palette.png"
 CONTACT = ARTIFACT_DIR / "synapse-ask-real-tui-ospf.contact.png"
@@ -206,9 +207,10 @@ def render_gif() -> None:
     run([
         "ffmpeg", "-y", "-i", str(RAW_MP4), "-i", str(PALETTE),
         "-lavfi", f"fps={GIF_FPS},scale=1080:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=4",
-        str(OUTPUT_GIF),
+        str(GENERATED_GIF),
     ], timeout=60)
-    run(["gifsicle", "--optimize=3", "--colors", "256", "--lossy=60", str(OUTPUT_GIF), "-o", str(OUTPUT_GIF)], timeout=60)
+    run(["gifsicle", "--optimize=3", "--colors", "256", "--lossy=60", str(GENERATED_GIF), "-o", str(GENERATED_GIF)], timeout=60)
+    os.replace(GENERATED_GIF, OUTPUT_GIF)
 
 
 def main() -> int:

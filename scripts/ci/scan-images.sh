@@ -3,16 +3,8 @@ set -euo pipefail
 
 output_dir="${1:-.local-artifacts/sbom}"
 trivy_image="${TRIVY_IMAGE:-aquasec/trivy:0.66.0}"
-accepted_findings="docs/SECURITY_ACCEPTED_FINDINGS.md"
 trivy_exit_code="${TRIVY_EXIT_CODE:-0}"
 cache_dir="${TRIVY_CACHE_DIR:-${HOME}/.cache/trivy}"
-
-if [ -f "$accepted_findings" ]; then
-  echo "Accepted vulnerability decisions are documented in $accepted_findings"
-else
-  echo "No accepted findings file ($accepted_findings). All findings must be addressed or explicitly accepted in commits."
-  accepted_findings=""
-fi
 
 mkdir -p "$output_dir" "$cache_dir"
 
@@ -23,7 +15,7 @@ import subprocess
 
 report = json.loads(
     subprocess.check_output(
-        ["python3", "scripts/check_image_versions.py", "--offline-fixture", "--format", "json"],
+        ["python3", "-m", "scripts.checks", "images", "--offline-fixture", "--format", "json"],
         text=True,
     )
 )

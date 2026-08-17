@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Check local Markdown links without requiring network access."""
 
 from __future__ import annotations
@@ -78,10 +77,10 @@ def check_link(root: Path, source: Path, raw_target: str) -> str | None:
     return None
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", nargs="?", default=".")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     root = Path(args.root).resolve()
     failures: list[str] = []
 

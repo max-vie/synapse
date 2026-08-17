@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-"""Public repository hygiene checks for Synapse files.
+"""Public-facing claim and path checks for repository files.
 
 This is stricter than the workflow validator and focuses on public-release polish:
 - no tracked or untracked public env files with real values
@@ -19,16 +18,16 @@ from pathlib import Path
 from typing import Iterable
 
 TEXT_SUFFIXES = {".md", ".json", ".py", ".sh", ".txt", ".yml", ".yaml", ".example", ".svg"}
-TEXT_NAMES = {"README.md", "SECURITY.md", "Makefile", ".gitignore"}
+TEXT_NAMES = {"README.md", "Makefile", ".gitignore"}
 SKIP_DIRS = {".git", ".pytest_cache", "__pycache__", ".venv", "venv", "node_modules", ".local-artifacts", "tmp"}
 # Paths exempt from PRIVATE_IP, LOCAL_PATH, AUTH_SECRET, ENV_SECRET checks:
 # test files deliberately contain these patterns for their own validation.
 HYGIENE_EXEMPT_PATHS = {
     "scripts/capture/capture_ask_gif.py",
-    "scripts/synapse/ask.py",
-    "tests/test_ask_formatting.py",
-    "tests/test_ask_http_sanitization.py",
-    "tests/test_synapse_service_fastapi.py",
+    "src/synapse/ask.py",
+    "tests/ask/test_client.py",
+    "tests/app/test_http.py",
+    "tests/tooling/test_proof.py",
 }
 
 
@@ -44,8 +43,8 @@ CLAIM_RE = re.compile(
 NON_CLAIM_RE = re.compile(r"(?i)\b(?:not|no|avoid|must not|do not claim|does not claim|is not|not a goal|not presented as)\b")
 CLAIM_PROMPT_RE = re.compile(r"(?i)\b(?:unsupported claim|claim prompt|refuse (?:this|the) unsupported)\b")
 CLAIM_EXEMPT_PREFIXES = ("scripts/benchmark/fixtures/",)
-CLAIM_EXEMPT_PATHS = {"scripts/benchmark/scoring.py"}
-CLAIM_EXEMPT_FIELD_PATHS = {"scripts/e2e/local_e2e_proof.py"}
+CLAIM_EXEMPT_PATHS = {"scripts/proof/scoring.py", "scripts/proof/scenarios.py"}
+CLAIM_EXEMPT_FIELD_PATHS = {"scripts/proof/runner.py"}
 
 
 def relative_posix(root: Path, path: Path) -> str:
@@ -135,7 +134,7 @@ def scan_file(root: Path, path: Path) -> list[Finding]:
     skip_hygiene = rel in HYGIENE_EXEMPT_PATHS
 
     for line_no, line in enumerate(text.splitlines(), start=1):
-        if path.name == "public_hygiene.py" and (
+        if path.name == "public.py" and path.parent.name == "checks" and (
             "production[- ]ready" in line
             or "commercial\\s+" in line
             or "commercial product" in line

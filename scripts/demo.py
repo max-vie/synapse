@@ -19,8 +19,9 @@ from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT = SCRIPT_DIR.parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
+SRC_DIR = ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 from synapse.metadata import build_metadata, chunk_text  # noqa: E402
 
@@ -71,16 +72,12 @@ def main() -> int:
     print("== Synapse no-credentials reviewer demo ==", flush=True)
     print("Scope: no Docker, no .env, no tokens, no network calls", flush=True)
 
-    run([sys.executable, "scripts/validate.py", "."])
-    run([sys.executable, "scripts/check_removed_publisher.py", "."])
     metadata, chunks = verify_metadata_subset()
     ask_output = dry_run_ask()
     preview = ask_output["sample_index_preview"]
 
     print("OK: deterministic metadata and Ask dry-run subset passed.")
     print("\nSynapse demo proof:")
-    print("- validation: passed")
-    print("- removed_publisher_scan: passed")
     print("- tests: deterministic stdlib subset passed")
     print(f"- ask_mode: {ask_output['mode']}")
     print(f"- demo_note_title: {preview['metadata']['title']}")

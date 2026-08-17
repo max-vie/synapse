@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-"""Tiny deterministic Ollama-compatible mock for CI FastAPI service proof."""
+"""Tiny deterministic Ollama-compatible mock for CI service proof."""
 from __future__ import annotations
 
 import argparse

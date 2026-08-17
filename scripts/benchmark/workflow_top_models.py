@@ -12,8 +12,10 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,11 +26,12 @@ if __package__ in (None, ""):
 
 from scripts.benchmark import report  # noqa: E402
 from scripts.benchmark.constants import BENCHMARK_REPORT_PATH, DEFAULT_OUTPUT_DIR, MATRIX_PATH, ROOT  # noqa: E402
+from scripts.lab.runtime import Lab  # noqa: E402
 
 OUTPUT_DIR = DEFAULT_OUTPUT_DIR
 EVIDENCE_DIR = ROOT / ".local-artifacts" / "evidence"
 ENV_FILE = ROOT / ".env"
-E2E_PROOF = ROOT / "scripts" / "e2e" / "local_e2e_proof.py"
+E2E_PROOF = ROOT / "scripts" / "proof" / "runner.py"
 REPORT_PATH = BENCHMARK_REPORT_PATH
 MODEL_MATRIX = MATRIX_PATH
 SECRET_KEYS = ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "APP_KEY", "KEY")
@@ -120,7 +123,18 @@ def run_shell(command: str, *, timeout: int, env: dict[str, str] | None = None) 
 
 
 def compose(command: str, *, timeout: int) -> dict[str, Any]:
-    return run_shell(f"source scripts/e2e/lib.sh && compose {command}", timeout=timeout)
+    started = time.monotonic()
+    try:
+        process = Lab(env_path=ENV_FILE).compose(*shlex.split(command), check=False, capture=True)
+        return {
+            "ok": process.returncode == 0,
+            "returncode": process.returncode,
+            "stdout": process.stdout,
+            "stderr": process.stderr,
+            "duration_s": round(time.monotonic() - started, 3),
+        }
+    except Exception as exc:  # noqa: BLE001 - benchmark records failures as data.
+        return {"ok": False, "returncode": None, "stdout": "", "stderr": str(exc), "duration_s": round(time.monotonic() - started, 3)}
 
 
 def compose_model_names() -> set[str]:
@@ -232,7 +246,11 @@ def run_workflow_for_model(model: str, args: argparse.Namespace, original_env_te
         recreate = compose("up -d --force-recreate synapse-service", timeout=300)
         if not recreate.get("ok"):
             return parse_evidence(model, env, time.monotonic() - started, False, recreate.get("stdout", ""), recreate.get("stderr", "synapse-service recreate failed"))
-        proof = run_shell(f"python3 {sh_quote(str(E2E_PROOF))} --suite {suite_arg}", timeout=args.workflow_timeout)
+        proof = run_shell(
+            f"python3 {sh_quote(str(E2E_PROOF))} --suite {suite_arg}",
+            timeout=args.workflow_timeout,
+            env={"SYNAPSE_ENV_FILE": str(ENV_FILE)},
+        )
         return parse_evidence(model, env, time.monotonic() - started, bool(proof.get("ok")), proof.get("stdout", ""), proof.get("stderr", ""))
     finally:
         if args.delete_after and pulled_here:
@@ -266,7 +284,8 @@ def write_run(models: list[dict[str, Any]], args: argparse.Namespace) -> Path:
     return path
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    global ENV_FILE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=5, help="number of top models to live-test")
     parser.add_argument("--max-params", type=float, default=48.0, help="skip models over this parameter count")
@@ -276,7 +295,7 @@ def main() -> int:
     parser.add_argument("--proof-suite", choices=("simple", "complex"), default="simple", help="Local E2E proof suite to run")
     parser.add_argument("--skip-pull", action="store_true", help="do not pull into compose Ollama; assume selected models already exist at the configured container-reachable Ollama endpoint")
     parser.add_argument("--delete-after", action="store_true", help="delete models that were not installed before this script")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not ENV_FILE.exists():
         raise SystemExit(f"missing {ENV_FILE}")
@@ -286,14 +305,21 @@ def main() -> int:
         raise SystemExit("no top models selected for workflow proof")
     print("workflow proof models=" + ",".join(selected), flush=True)
 
-    original_env_text = ENV_FILE.read_text(encoding="utf-8")
-    original_models = compose_model_names()
-    results = []
-    for model in selected:
-        print(f"== workflow {model} ==", flush=True)
-        item = run_workflow_for_model(model, args, original_env_text, original_models)
-        results.append(item)
-        print(f"{model}: live workflow score {item['workflow']['score']} pass={item['workflow']['passed']}", flush=True)
+    source_env = ENV_FILE
+    artifact_temp = OUTPUT_DIR / ".runtime"
+    artifact_temp.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="workflow-", dir=artifact_temp) as temporary:
+        ENV_FILE = Path(temporary) / ".env"
+        ENV_FILE.write_text(source_env.read_text(encoding="utf-8"), encoding="utf-8")
+        original_env_text = ENV_FILE.read_text(encoding="utf-8")
+        original_models = compose_model_names()
+        results = []
+        for model in selected:
+            print(f"== workflow {model} ==", flush=True)
+            item = run_workflow_for_model(model, args, original_env_text, original_models)
+            results.append(item)
+            print(f"{model}: live workflow score {item['workflow']['score']} pass={item['workflow']['passed']}", flush=True)
+    ENV_FILE = source_env
 
     path = write_run(results, args)
     print(f"Wrote {path}")
