@@ -9,9 +9,11 @@ description = "Local Markdown-to-RAG infrastructure lab"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
+authors = [{name = "max-vie", email = "mitterbauer05@gmail.com"}]
 dependencies = [
-  "fastapi==0.124.0",
-  "uvicorn[standard]==0.38.0",
+  "fastapi==0.141.1",
+  "starlette==1.6.0",
+  "uvicorn[standard]==0.52.3",
 ]
 
 [project.optional-dependencies]

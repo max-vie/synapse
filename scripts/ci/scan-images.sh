@@ -43,8 +43,8 @@ for image in "${images[@]}"; do
 
   echo "Generating SBOM for $image -> $sbom_path"
   docker run --rm \
-    -v "$PWD:/work" \
-    -v "$cache_dir:/root/.cache" \
+    -v "$PWD:/work:Z" \
+    -v "$cache_dir:/root/.cache:Z" \
     "$trivy_image" \
     image \
     --format cyclonedx \
@@ -53,8 +53,8 @@ for image in "${images[@]}"; do
 
   echo "Scanning $image for HIGH/CRITICAL findings"
   if ! docker run --rm \
-    -v "$PWD:/work" \
-    -v "$cache_dir:/root/.cache" \
+    -v "$PWD:/work:Z" \
+    -v "$cache_dir:/root/.cache:Z" \
     "$trivy_image" \
     image \
     --severity HIGH,CRITICAL \

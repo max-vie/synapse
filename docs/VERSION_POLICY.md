@@ -4,10 +4,10 @@ Synapse pins container images so the local lab stays reproducible. Pins are not 
 
 ## Current reviewed pins
 
-These pins were reviewed against upstream release metadata on 2026-06-01:
+These pins were reviewed against upstream release metadata on 2026-08-17:
 
-- Qdrant: `qdrant/qdrant:v1.18.1`
-- Ollama: `ollama/ollama:0.24.0`
+- Qdrant: `qdrant/qdrant:v1.19.0`
+- Ollama: `ollama/ollama:0.32.14`
 - Synapse service runtime: `python:3.13-slim`
 - Wiki.js: `ghcr.io/requarks/wiki:2.5.314`
 - Wiki.js Postgres: `postgres:16-alpine`

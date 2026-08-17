@@ -1,4 +1,3 @@
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -89,7 +88,7 @@ def test_readyz_skips_wikijs_blocking_when_publishing_disabled(monkeypatch):
     monkeypatch.setenv("OLLAMA_INTERNAL_BASE_URL", "http://127.0.0.1:2")
     monkeypatch.setenv("WIKIJS_BASE_URL", "http://127.0.0.1:3")
     # Placeholder token -> publishing disabled -> wikijs failure non-blocking
-    monkeypatch.setenv("WIKIJS_API_TOKEN", "replace-after-wikijs-setup")
+    monkeypatch.setenv("WIKIJS_API_TOKEN", "replace-after-wikijs-admin-setup")
 
     # Qdrant and Ollama still unreachable -> 503, but not because of wikijs
     client = TestClient(service.app)
@@ -444,6 +443,6 @@ def test_application_factory_routes_through_injected_runtime(monkeypatch):
 
 
 def test_http_timeout_parsing_is_bounded(monkeypatch):
-    for raw, expected in (("5", 5.0), ("invalid", 60.0), ("0.2", 1.0)):
+    for raw, expected in (("5", 5.0), ("invalid", 180.0), ("0.2", 1.0)):
         monkeypatch.setenv("SYNAPSE_HTTP_TIMEOUT_SECONDS", raw)
         assert http_client.default_timeout_seconds() == expected

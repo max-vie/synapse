@@ -31,6 +31,9 @@ def test_local_compose_contract_is_authenticated_private_and_bounded():
     assert environment["SYNAPSE_AUTH_DISABLED"] == "${SYNAPSE_AUTH_DISABLED:-false}"
     assert environment["SYNAPSE_MAX_CONTENT_BYTES"] == "${SYNAPSE_MAX_CONTENT_BYTES:-262144}"
     assert environment["SYNAPSE_MAX_PARALLEL_EXECUTIONS"] == "${SYNAPSE_MAX_PARALLEL_EXECUTIONS:-2}"
+    assert environment["SYNAPSE_HTTP_TIMEOUT_SECONDS"] == "${SYNAPSE_HTTP_TIMEOUT_SECONDS:-180}"
+    assert "working_dir" not in service
+    assert "command" not in service
     assert all("container_name" not in item for item in compose["services"].values())
 
 

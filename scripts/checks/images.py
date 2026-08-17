@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
-import sys
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,8 +37,8 @@ IMAGE_SOURCES: tuple[ImageSource, ...] = (
 )
 
 OFFLINE_LATEST = {
-    "qdrant": "v1.18.1",
-    "ollama": "v0.24.0",
+    "qdrant": "v1.19.0",
+    "ollama": "v0.32.14",
     "wikijs": "v2.5.314",
 }
 

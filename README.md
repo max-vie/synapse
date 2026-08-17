@@ -53,8 +53,11 @@ flowchart LR
     api -->|GraphQL| wiki[Wiki.js :3000]
     api -->|upsert vectors| qdrant[Qdrant :6333]
     ask[Ask / RAG] --> api
-    api -->|embed + answer| ollama
-    ollama -->|search| qdrant
+    api -->|embed question| ollama
+    api -->|query vector| qdrant
+    qdrant -->|matching chunks| api
+    api -->|answer prompt| ollama
+    ollama -->|embedding + generated answer| api
     api -->|source quotes| answer[Answer]
 ```
 

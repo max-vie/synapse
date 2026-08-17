@@ -13,9 +13,9 @@ from .upstream import UpstreamError
 
 def default_timeout_seconds() -> float:
     try:
-        return max(1.0, float(os.environ.get("SYNAPSE_HTTP_TIMEOUT_SECONDS", "60")))
+        return max(1.0, float(os.environ.get("SYNAPSE_HTTP_TIMEOUT_SECONDS", "180")))
     except ValueError:
-        return 60.0
+        return 180.0
 
 
 def _upstream_code_from_url(url: str) -> str:

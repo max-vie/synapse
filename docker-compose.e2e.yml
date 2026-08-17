@@ -1,7 +1,7 @@
 name: synapse-e2e
 services:
   qdrant:
-    image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.18.1}
+    image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.19.0}
     restart: unless-stopped
     profiles:
     - infra
@@ -11,7 +11,7 @@ services:
     volumes:
     - qdrant-data:/qdrant/storage
   ollama:
-    image: ${OLLAMA_IMAGE:-ollama/ollama:0.24.0}
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.32.14}
     restart: unless-stopped
     profiles:
     - infra
@@ -32,8 +32,6 @@ services:
     - qdrant
     - ollama
     - wikijs
-    working_dir: /app
-    command: python -m synapse.service
     ports:
     - 127.0.0.1:${SYNAPSE_SERVICE_PORT:-15515}:8080
     environment:
@@ -46,7 +44,7 @@ services:
       OLLAMA_ANSWER_NUM_PREDICT: ${OLLAMA_ANSWER_NUM_PREDICT:-256}
       WIKIJS_BASE_URL: http://wikijs:3000
       WIKIJS_PUBLIC_BASE_URL: ${WIKIJS_PUBLIC_BASE_URL:-}
-      WIKIJS_API_TOKEN: ${WIKIJS_API_TOKEN:-replace-after-wikijs-setup}
+      WIKIJS_API_TOKEN: ${WIKIJS_API_TOKEN:-replace-after-wikijs-admin-setup}
       WIKIJS_LOCALE: ${WIKIJS_LOCALE:-en}
       QDRANT_BASE_URL: http://qdrant:6333
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-synapse_notes__nomic_embed_text__768}
@@ -61,7 +59,7 @@ services:
       SYNAPSE_MAX_QUESTION_LENGTH: ${SYNAPSE_MAX_QUESTION_LENGTH:-1000}
       SYNAPSE_MAX_PARALLEL_EXECUTIONS: ${SYNAPSE_MAX_PARALLEL_EXECUTIONS:-2}
       SYNAPSE_EMBED_BATCH_SIZE: ${SYNAPSE_EMBED_BATCH_SIZE:-16}
-      SYNAPSE_HTTP_TIMEOUT_SECONDS: ${SYNAPSE_HTTP_TIMEOUT_SECONDS:-60}
+      SYNAPSE_HTTP_TIMEOUT_SECONDS: ${SYNAPSE_HTTP_TIMEOUT_SECONDS:-180}
       SYNAPSE_ANSWER_MODE: ${SYNAPSE_ANSWER_MODE:-llm}
       SYNAPSE_ANSWER_VALIDATION: ${SYNAPSE_ANSWER_VALIDATION:-structural}
       RAG_QUOTE_OVERLAP_THRESHOLD: ${RAG_QUOTE_OVERLAP_THRESHOLD:-0.3}

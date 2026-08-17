@@ -69,7 +69,7 @@ jobs:
           trap 'rm -rf "$tmp_dir"' EXIT
           mkdir "$tmp_dir/source"
           git ls-files -z | tar --null --files-from - -cf - | tar -xf - -C "$tmp_dir/source"
-          gitleaks detect --source "$tmp_dir/source" --no-git --config "$tmp_dir/source/.gitleaks.toml" --redact --verbose
+          gitleaks detect --source "$tmp_dir/source" --no-git --redact --verbose
 
       - name: Shell scripts
         run: shellcheck scripts/ci/*.sh

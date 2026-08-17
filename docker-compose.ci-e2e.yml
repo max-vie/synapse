@@ -2,7 +2,6 @@ name: synapse-ci-e2e
 services:
   mock-ollama:
     image: ${MOCK_OLLAMA_IMAGE:-python:3.13-slim}
-    restart: unless-stopped
     working_dir: /app/scripts/proof
     command: python mock_ollama.py --host '' --port 11435
     expose:
@@ -16,8 +15,7 @@ services:
       retries: 12
 
   qdrant:
-    image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.18.1}
-    restart: unless-stopped
+    image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.19.0}
     ports:
       - 127.0.0.1:${QDRANT_PORT:-6633}:6333
     volumes:
@@ -28,14 +26,11 @@ services:
       context: .
       dockerfile: Dockerfile
     image: ${SYNAPSE_SERVICE_IMAGE:-synapse-service:local}
-    restart: unless-stopped
     depends_on:
       qdrant:
         condition: service_started
       mock-ollama:
         condition: service_healthy
-    working_dir: /app
-    command: python -m synapse.service
     ports:
       - 127.0.0.1:${SYNAPSE_SERVICE_PORT:-6578}:8080
     environment:

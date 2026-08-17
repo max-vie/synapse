@@ -13,6 +13,7 @@ tmp/
 __pycache__/
 *.py[cod]
 *.egg-info/
+build/
 .pytest_cache/
 .venv/
 venv/
@@ -21,7 +22,6 @@ htmlcov/
 
 # Credential exports with live secrets
 *credentials*.json
-credentials.json
 
 # Obsidian local state
 examples/obsidian-vault/Synapse-Demo/e2e-*.md

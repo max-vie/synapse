@@ -7,7 +7,7 @@ PYTHON ?= python3
 help:
 	@printf '%s\n' \
 		"Synapse commands:" \
-		"  make lab-up      Start/import the local lab services" \
+		"  make lab-up      Start and prepare the local lab services" \
 		"  make start-synapse Start Synapse service after infra + collection setup" \
 		"  make configure   Check manual Wiki.js API/token setup" \
 		"  make proof       Run the live lab proof after configure" \
