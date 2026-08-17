@@ -197,7 +197,7 @@ def score_sources(answer: str, expected_sources: Iterable[str] | None, required_
             expected_indices = set(range(1, source_count + 1))
         citation_numbers = [
             int(part.strip())
-            for match in re.finditer(r"(?:^|\s)\[([0-9,\s]+)\](?=\s*(?:[.!?]|$))", answer_text)
+            for match in re.finditer(r"(?:^|\s)\[([0-9,\s]+)\](?=\s*(?:[.!?,]|$))", answer_text)
             for part in match.group(1).split(",")
             if part.strip().isdigit()
         ]

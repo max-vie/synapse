@@ -432,6 +432,7 @@ def build_answer_payload(question: str, context: str, env: Mapping[str, str]) ->
             "Answer only from the provided note context.",
             "Do not use outside knowledge or invent details.",
             f"If the context does not contain the answer, say exactly: {INSUFFICIENT_ANSWER}",
+            "If the context explicitly says a value is unavailable, redacted, or not provided, state that boundary exactly and cite the supporting source instead of inventing a value.",
             "Quote identifiers, codenames, commands, paths, and source labels exactly as written.",
             "Cite supporting source numbers like [1].",
             "End the answer with the supporting source number, for example [1].",
@@ -469,8 +470,6 @@ def extractive_answer(ctx: Mapping[str, Any]) -> str:
     """
     raw_sources = ctx.get("sources")
     sources = raw_sources if isinstance(raw_sources, list) else []
-    question = str(ctx.get("question") or "")
-    question_lower = question.casefold()
     parts = []
     for index, source in enumerate(sources, start=1):
         if not isinstance(source, Mapping):
@@ -490,8 +489,8 @@ def extractive_answer(ctx: Mapping[str, Any]) -> str:
 def _ngrams(text: str, n: int = 3) -> set[str]:
     tokens = _normalize(text).split()
     if len(tokens) < n:
-        return {f" ".join(tokens)} if tokens else set()
-    return {f" ".join(tokens[i : i + n]) for i in range(len(tokens) - n + 1)}
+        return {" ".join(tokens)} if tokens else set()
+    return {" ".join(tokens[i : i + n]) for i in range(len(tokens) - n + 1)}
 
 
 def _quote_overlap(answer: str, sources: list[Mapping[str, Any]]) -> float:
@@ -556,7 +555,7 @@ def answer_or_refuse(
         return refuse("empty_or_refused_answer")
 
     citation_numbers: list[int | float] = []
-    for match in re.finditer(r"(?:^|\s)\[([0-9,\s]+)\](?=\s*[.!?]?(?:\s|$))", answer):
+    for match in re.finditer(r"(?:^|\s)\[([0-9,\s]+)\](?=\s*[.!?,]?(?:\s|$))", answer):
         before = answer[: match.start()].rstrip()
         previous = re.search(r"([A-Za-z][A-Za-z0-9_-]*)$", before)
         if previous and previous.group(1).lower() == "rfc":

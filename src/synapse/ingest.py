@@ -184,18 +184,33 @@ def publish_wikijs(item: Mapping[str, Any], env: Mapping[str, str], request_json
             {"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
         )
         errors = response.get("errors")
-        if isinstance(errors, list) and errors:
+        not_found_lookup = (
+            "singleByPath" in query
+            and isinstance(errors, list)
+            and errors
+            and all(
+                isinstance(error, Mapping)
+                and str(error.get("message") or "").casefold() == "this page does not exist."
+                for error in errors
+            )
+        )
+        if isinstance(errors, list) and errors and not not_found_lookup:
             messages = "; ".join(str(error.get("message") if isinstance(error, Mapping) else error) for error in errors)
             raise UpstreamError("upstream_wikijs_error", f"Wiki.js GraphQL error: {messages}")
         data = response.get("data")
         return data if isinstance(data, dict) else {}
 
     path = str(item["wiki_path"]).lstrip("/")
-    list_data = gql(
-        "query ($path: String!, $locale: String!) { pages { singleByPath(path: $path, locale: $locale) { id path title } } }",
-        {"path": "/" + path, "locale": locale},
-    )
+    lookup_query = "query ($path: String!, $locale: String!) { pages { singleByPath(path: $path, locale: $locale) { id path title } } }"
+    list_data = gql(lookup_query, {"path": "/" + path, "locale": locale})
     page_data = list_data.get("pages", {}).get("singleByPath") if isinstance(list_data.get("pages"), Mapping) else None
+    if not page_data:
+        # Wiki.js 2.5 accepts the slash-prefixed form in some deployments but
+        # resolves existing pages only when the path has no leading slash in
+        # others. Retry the lookup in the canonical stored form before trying
+        # to create a page, otherwise an update is misclassified as a duplicate.
+        list_data = gql(lookup_query, {"path": path, "locale": locale})
+        page_data = list_data.get("pages", {}).get("singleByPath") if isinstance(list_data.get("pages"), Mapping) else None
     existing = page_data if isinstance(page_data, Mapping) and page_data.get("id") else None
     variables = {"path": path, "title": item["title"], "content": item["formatted_markdown"], "locale": locale}
     if existing:

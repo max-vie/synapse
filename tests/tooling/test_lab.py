@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -99,6 +98,32 @@ def test_up_owns_the_order_of_lifecycle_steps(monkeypatch, tmp_path: Path):
     assert events == ["initialize", "infra", "Qdrant", "Wiki.js", "Ollama", "models", "collection", "service"]
 
 
+def test_cloud_mode_adds_signed_relay_overlay(tmp_path: Path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "OLLAMA_CLOUD_MODE=true\n"
+        "OLLAMA_CLOUD_KEY_FILE=/private/id_ed25519\n"
+        "OLLAMA_CLOUD_PUBLIC_KEY_FILE=/private/id_ed25519.pub\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "docker-compose.e2e.yml").write_text("services: {}\n", encoding="utf-8")
+    (tmp_path / "docker-compose.cloud-e2e.yml").write_text("services: {}\n", encoding="utf-8")
+    lab = Lab(root=tmp_path, env_path=env_path)
+    calls = []
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(lab, "_select_compose", lambda: ["docker", "compose"])
+        monkeypatch.setattr(lab, "_exec", lambda args, **_kwargs: calls.append(args) or SimpleNamespace(returncode=0))
+        lab.compose("config")
+    finally:
+        monkeypatch.undo()
+
+    command = calls[0]
+    assert command[command.index("-f") + 1].endswith("docker-compose.e2e.yml")
+    assert command[command.index("-f", command.index("-f") + 1) + 1].endswith("docker-compose.cloud-e2e.yml")
+
+
 def test_remove_requires_confirmation_when_noninteractive(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("scripts.lab.runtime.sys.stdin", SimpleNamespace(isatty=lambda: False))
     with pytest.raises(LabError, match="--yes"):
@@ -140,7 +165,8 @@ def test_ci_compose_uses_relocated_mock_and_installed_application():
     service = compose["services"]["synapse-service"]
     assert mock["working_dir"] == "/app/scripts/proof"
     assert "./scripts/proof:/app/scripts/proof:ro,Z" in mock["volumes"]
-    assert service["working_dir"] == "/app"
+    assert "working_dir" not in service
+    assert "command" not in service
     assert not service.get("volumes")
 
 
@@ -175,3 +201,11 @@ def test_make_targets_use_the_single_lab_interface():
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     for command in ("up", "configure", "proof", "mocked-proof", "real-proof", "status", "logs", "down", "remove"):
         assert f"scripts.lab {command}" in makefile
+
+
+def test_lab_cli_exposes_real_proof_suite():
+    from scripts.lab.__main__ import build_parser
+
+    args = build_parser().parse_args(["proof", "--suite", "real"])
+    assert args.command == "proof"
+    assert args.suite == "real"

@@ -979,6 +979,13 @@ def test_answer_gate_accepts_multi_source_citations_without_repair():
     assert result["answer"].endswith("[1, 2]")
 
 
+def test_answer_gate_accepts_comma_separated_multi_source_citations():
+    result = run_answer_or_refuse("The queue is current. [1], [2].")
+
+    assert result["insufficient_context"] is False
+    assert result["retrieval"]["answer_validation"] == "structural_citations_only"
+
+
 def test_answer_gate_rejects_uncited_answers_even_when_sources_exist():
     result = run_answer_or_refuse("OSPF uses Dijkstra's Shortest Path First algorithm.")
 

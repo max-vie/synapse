@@ -112,6 +112,12 @@ class Lab:
         capture: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         base = [*self._select_compose(), "--env-file", str(self.env_path), "-f", str(self.compose_path)]
+        values = self.environment()
+        if values.get("OLLAMA_CLOUD_MODE", "").strip().casefold() in {"1", "true", "yes", "on"}:
+            overlay = self.root / "docker-compose.cloud-e2e.yml"
+            if not overlay.exists():
+                raise LabError(f"Ollama Cloud overlay is missing: {overlay}")
+            base.extend(["-f", str(overlay)])
         command = [*base, *args]
         if self._use_docker_group:
             command = ["sg", "docker", "-c", shlex.join(command)]
@@ -199,7 +205,9 @@ class Lab:
         self.pull_models(values)
         self.ensure_collection(values)
         self.start_service()
-        print("[OK] Local Synapse lab is running")
+        cloud = values.get("OLLAMA_CLOUD_MODE", "").strip().casefold() in {"1", "true", "yes", "on"}
+        mode = "Ollama Cloud relay" if cloud else "local Ollama"
+        print(f"[OK] Synapse lab is running ({mode})")
 
     def configure(self) -> None:
         values = self.environment()

@@ -1,0 +1,12 @@
+name: synapse-e2e
+
+# Optional overlay for a signed-in Ollama Cloud relay. The Ollama service still
+# exposes the normal local API inside the Compose network, but cloud-capable
+# models are offloaded by Ollama instead of being evaluated in this container.
+# The private key is mounted read-only and is supplied by the operator through
+# OLLAMA_CLOUD_KEY_FILE; it is never copied into the repository.
+services:
+  ollama:
+    volumes:
+      - ${OLLAMA_CLOUD_KEY_FILE:?set OLLAMA_CLOUD_KEY_FILE for cloud mode}:/root/.ollama/id_ed25519:ro
+      - ${OLLAMA_CLOUD_PUBLIC_KEY_FILE:?set OLLAMA_CLOUD_PUBLIC_KEY_FILE for cloud mode}:/root/.ollama/id_ed25519.pub:ro

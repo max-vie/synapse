@@ -1,6 +1,6 @@
 import threading
 
-from synapse.ingest import ingest, index_qdrant, note_from_payload, note_update_lock, prepare_publish_payload, rollback_new_qdrant_chunks
+from synapse.ingest import ingest, index_qdrant, note_from_payload, prepare_publish_payload, rollback_new_qdrant_chunks
 
 
 def test_ingest_rejects_note_above_local_lab_content_limit_before_model_calls():
@@ -409,6 +409,44 @@ def test_publish_wikijs_updates_existing_page_via_singleByPath():
     assert create is None, "must not call create mutation for existing page"
 
 
+def test_publish_wikijs_retries_existing_lookup_without_leading_slash():
+    graphql_calls = []
+
+    def request_json(method, url, body, headers=None):
+        if url.endswith("/api/chat"):
+            return {"message": {"content": "# Formatted\n\nBody."}}
+        if url.endswith("/api/embed"):
+            return {"embedding": [0.1, 0.2, 0.3]}
+        if url.endswith("/points/count"):
+            return {"result": {"count": 1}}
+        if url.endswith("/graphql"):
+            graphql_calls.append(body)
+            if "singleByPath" in body.get("query", ""):
+                if body["variables"]["path"].startswith("/"):
+                    return {"data": {"pages": {"singleByPath": None}}}
+                return {"data": {"pages": {"singleByPath": {"id": 42, "path": "synapse-demo/existing", "title": "Existing"}}}}
+            if "mutation Update" in body.get("query", ""):
+                return {"data": {"pages": {"update": {"responseResult": {"succeeded": True}, "page": {"id": 42}}}}}
+        return {"result": {"status": "ok"}}
+
+    result = ingest(
+        {"path": "Synapse-Demo/Existing.md", "content": "# Existing\n\nBody."},
+        env={
+            "QDRANT_BASE_URL": "http://qdrant:6333",
+            "QDRANT_COLLECTION": "synapse_notes",
+            "OLLAMA_INTERNAL_BASE_URL": "http://ollama:11434",
+            "WIKIJS_BASE_URL": "http://wikijs:3000",
+            "WIKIJS_API_TOKEN": "token",
+        },
+        request_json=request_json,
+    )
+
+    lookups = [call for call in graphql_calls if "singleByPath" in call.get("query", "")]
+    assert [call["variables"]["path"] for call in lookups] == ["/synapse-demo/existing", "synapse-demo/existing"]
+    assert any("mutation Update" in call.get("query", "") for call in graphql_calls)
+    assert result["status"] == "ok"
+
+
 def test_publish_wikijs_creates_new_page_when_singleByPath_returns_none():
     graphql_calls = []
 
@@ -447,6 +485,39 @@ def test_publish_wikijs_creates_new_page_when_singleByPath_returns_none():
     assert create is not None, "must call create mutation for new page"
     update = next((c for c in graphql_calls if "mutation Update" in c["query"]), None)
     assert update is None, "must not call update mutation for new page"
+
+
+def test_publish_wikijs_treats_wikijs_page_not_found_as_new_page():
+    def request_json(method, url, body, headers=None):
+        if url.endswith("/api/chat"):
+            return {"message": {"content": "# Formatted\n\nBody."}}
+        if url.endswith("/api/embed"):
+            return {"embedding": [0.1, 0.2, 0.3]}
+        if url.endswith("/points/count"):
+            return {"result": {"count": 1}}
+        if url.endswith("/graphql") and "singleByPath" in body.get("query", ""):
+            return {
+                "errors": [{"message": "This page does not exist."}],
+                "data": {"pages": {"singleByPath": None}},
+            }
+        if url.endswith("/graphql") and "mutation Create" in body.get("query", ""):
+            return {"data": {"pages": {"create": {"responseResult": {"succeeded": True}, "page": {"id": 7}}}}}
+        return {"result": {"status": "ok"}}
+
+    result = ingest(
+        {"path": "Synapse-Demo/Missing-Page.md", "content": "# Missing Page\n\nBody."},
+        env={
+            "QDRANT_BASE_URL": "http://qdrant:6333",
+            "QDRANT_COLLECTION": "synapse_notes",
+            "OLLAMA_INTERNAL_BASE_URL": "http://ollama:11434",
+            "OLLAMA_CHAT_BASE_URL": "http://ollama:11434",
+            "WIKIJS_BASE_URL": "http://wikijs:3000",
+            "WIKIJS_API_TOKEN": "token",
+        },
+        request_json=request_json,
+    )
+
+    assert result["status"] == "ok"
 
 
 
@@ -538,7 +609,6 @@ def test_ingest_publish_rollback_qdrant_on_wikijs_failure():
     rollback_call = delete_calls[0]
     filter_must = rollback_call["body"]["filter"]["must"]
     # The rollback delete targets note_id AND the new content_hash (not must_not)
-    note_id_match = {"key": "note_id", "match": {"value": "stable-note-id"}}
     content_hash_key = next((m for m in filter_must if m["key"] == "content_hash"), None)
     assert content_hash_key is not None, "rollback delete must filter on content_hash"
     assert "must_not" not in rollback_call["body"]["filter"], "rollback uses must (not must_not)"

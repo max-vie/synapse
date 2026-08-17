@@ -19,7 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     subcommands.add_parser("configure", help="verify Wiki.js API configuration")
     subcommands.add_parser("start-service", help="build and start the Synapse service")
     proof = subcommands.add_parser("proof", help="run a live proof suite")
-    proof.add_argument("--suite", choices=("simple", "complex", "ospf"), default="simple")
+    proof.add_argument("--suite", choices=("simple", "complex", "ospf", "real"), default="simple")
     subcommands.add_parser("mocked-proof", help="run the isolated mocked proof")
     subcommands.add_parser("real-proof", help="run the stronger configured real-stack proof")
     subcommands.add_parser("status", help="show container and HTTP status")

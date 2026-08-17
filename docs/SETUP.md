@@ -75,6 +75,21 @@ Open these in your browser:
 
 Ollama runs inside Compose at `http://ollama:11434` for the Synapse API container. Host-side scripts use `http://127.0.0.1:11434`. You usually do not open either endpoint in a browser.
 
+### Optional Ollama Cloud relay
+
+To exercise cloud generation without using the host Ollama daemon, set these values in the private `.env` before running `make lab-up`:
+
+```dotenv
+OLLAMA_CLOUD_MODE=true
+OLLAMA_CLOUD_KEY_FILE=/usr/share/ollama/.ollama/id_ed25519
+OLLAMA_CLOUD_PUBLIC_KEY_FILE=/usr/share/ollama/.ollama/id_ed25519.pub
+OLLAMA_FORMAT_MODEL=gpt-oss:20b-cloud
+OLLAMA_ANSWER_MODEL=gpt-oss:20b-cloud
+OLLAMA_EMBED_MODEL=nomic-embed-text
+```
+
+The lab then applies `docker-compose.cloud-e2e.yml`, mounts the signed-in Ollama key read-only, and lets the isolated Ollama container relay cloud-capable generation models. The embedding model remains local because Ollama Cloud does not currently publish an embedding model. Never commit either key path's contents or an Ollama API key. Keep the key files readable only by the account that runs the lab.
+
 ## Configure Wiki.js API token
 
 `make configure` is a local check for the manual Wiki.js API and token step. The lab services can start without a Wiki.js API token, but the live proof needs the Wiki.js API enabled and a usable token so Synapse can create, update, and read pages.
@@ -237,11 +252,14 @@ You usually edit only these values:
 - `OLLAMA_INTERNAL_BASE_URL`: container URL for Ollama. Keep the default `http://ollama:11434` unless the Synapse API should call a different container-reachable Ollama endpoint.
 - `OLLAMA_HOST_BASE_URL`: host-side proof URL for Ollama. Keep the default `http://127.0.0.1:11434` for the local Compose lab.
 - `OLLAMA_CHAT_BASE_URL`: optional container-reachable chat override. Leave unset for the normal local lab.
+- `OLLAMA_CLOUD_MODE`: set `true` to apply the signed-in cloud relay overlay; leave `false` for the normal local lab.
+- `OLLAMA_CLOUD_KEY_FILE` and `OLLAMA_CLOUD_PUBLIC_KEY_FILE`: host paths to the signed-in Ollama key pair used by the cloud overlay. They are mounted read-only and are never copied into the checkout.
 - `SYNAPSE_MAX_CONTENT_BYTES`: maximum note body accepted before formatting/indexing. Default `262144`.
 - `SYNAPSE_MAX_CHUNKS_PER_NOTE`: maximum chunks indexed for one note. Default `32`.
 - `SYNAPSE_MAX_QUESTION_LENGTH`: maximum Ask question length. Default `1000`.
 - `SYNAPSE_MAX_PARALLEL_EXECUTIONS`: concurrent Synapse API work items. Default `2`.
 - `SYNAPSE_EMBED_BATCH_SIZE`: chunk embeddings per Ollama `/api/embed` request. Default `16`.
+- `SYNAPSE_HTTP_TIMEOUT_SECONDS`: timeout for Ollama, Qdrant, and Wiki.js requests. Default `180` seconds so larger local models can respond without failing the workflow early.
 - `RAG_TOP_K`: number of top Qdrant results to keep after score filtering. Default `5`.
 - `RAG_CANDIDATE_K`: initial Qdrant query limit before score and grounding filters. Default `25`. Must be `>=` `RAG_TOP_K`.
 - `RAG_SCORE_THRESHOLD`: minimum Qdrant similarity score for a result to be accepted. Default `0.35`. Set `0` to accept all.

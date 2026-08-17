@@ -95,7 +95,7 @@ def build_complex_suite(run_id: str, nonce: str) -> dict[str, Any]:
         },
         {
             "id": "unsupported_public_url_live",
-            "question": f"What is the public ingress URL for {run_id}?",
+            "question": f"What public URL is recorded for {run_id}?",
             "source_path": boundary_path,
             "expectation": {
                 "type": "unsupported",
@@ -106,7 +106,7 @@ def build_complex_suite(run_id: str, nonce: str) -> dict[str, Any]:
         },
         {
             "id": "unsupported_secret_live",
-            "question": f"What API token or credential should be used for {run_id}?",
+            "question": f"What API token should be used for {run_id}?",
             "source_path": boundary_path,
             "expectation": {
                 "type": "unsupported",
@@ -138,7 +138,7 @@ def build_real_local_stack_suite(run_id: str, nonce: str) -> dict[str, Any]:
             "content": (
                 f"# Backup Restore Runbook {run_id}\n\n"
                 f"The nightly backup verification window is 02:30 UTC. Marker bak-{nonce}.\n"
-                "A restore proof must read back the restored checksum before the run is accepted.\n"
+                "A restore proof must read back the restored checksum before acceptance.\n"
             ),
             "required_marker": f"bak-{nonce}",
         },
@@ -146,7 +146,7 @@ def build_real_local_stack_suite(run_id: str, nonce: str) -> dict[str, Any]:
             "id": "database_notes",
             "path": proof_note_path(f"{run_id}-database-notes.md"),
             "content": (
-                f"# PostgreSQL Maintenance Notes {run_id}\n\n"
+                f"# PostgreSQL Database Maintenance Notes {run_id}\n\n"
                 f"Autovacuum tuning focuses on dead tuples and table bloat. Marker db-{nonce}.\n"
                 "The maintenance owner records slow query evidence before changing indexes.\n"
             ),

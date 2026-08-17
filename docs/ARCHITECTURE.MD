@@ -84,6 +84,8 @@ Benchmark reports may recommend larger opt-in models for answer quality, but the
 
 The lab keeps container and host Ollama URLs separate. The Synapse API uses `OLLAMA_INTERNAL_BASE_URL=http://ollama:11434` inside the Compose network. Host-side proof scripts use `OLLAMA_HOST_BASE_URL=http://127.0.0.1:11434` through the published localhost port, so `make proof` does not depend on Docker DNS names resolving on the host.
 
+For a signed-in cloud run, `OLLAMA_CLOUD_MODE=true` adds `docker-compose.cloud-e2e.yml`. That overlay mounts the operator's Ollama key pair read-only into the isolated relay. Cloud-capable format and answer models (for example `gpt-oss:20b-cloud`) are offloaded by Ollama; `nomic-embed-text` remains a local embedding model because Ollama Cloud does not currently expose embedding models. The application still calls the same internal Ollama API, so cloud mode exercises the production-shaped request and retrieval path without reusing the host daemon.
+
 ## Why deterministic note IDs
 
 Every note gets a deterministic `note_id` from its source and path. Synapse refuses concurrent updates for the same `note_id` inside the local service process so two webhook calls cannot race the stale-chunk cleanup for one note.
@@ -137,6 +139,7 @@ The webhook is shared-token protected, so Synapse treats resource limits as part
 - `SYNAPSE_MAX_QUESTION_LENGTH`: maximum Ask question length, default `1000` characters.
 - `SYNAPSE_MAX_PARALLEL_EXECUTIONS`: maximum concurrent Synapse API work items, default `2`.
 - `SYNAPSE_EMBED_BATCH_SIZE`: number of chunks sent to Ollama per embedding request, default `16`.
+- `SYNAPSE_HTTP_TIMEOUT_SECONDS`: timeout for external service requests, default `180` seconds for slower local models.
 
 These are local-lab guardrails, not production abuse protection. If the webhook is accidentally exposed, keep the endpoint private and rotate the shared token.
 
