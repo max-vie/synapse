@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.lab import collection as qdrant_setup  # noqa: E402
+from scripts.lab import envfile  # noqa: E402
 from scripts.proof.redaction import redact_sensitive  # noqa: E402
 from scripts.proof.scenarios import (  # noqa: E402
     COMPLEX_SUITE_ID,
@@ -41,16 +42,9 @@ LOCAL_URL_RE = re.compile(
 )
 
 def load_dotenv(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
     if not path.exists():
         raise SystemExit(f"missing {path}; run make lab-up first")
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip().strip('"').strip("'")
-    return values
+    return envfile.resolve_secret_values(envfile.load(path), env_path=path)
 
 
 def request_timeout_seconds() -> int:

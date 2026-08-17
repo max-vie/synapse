@@ -1,7 +1,7 @@
 name: synapse-e2e
 services:
   qdrant:
-    image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.19.0}
+    image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc}
     restart: unless-stopped
     profiles:
     - infra
@@ -10,8 +10,13 @@ services:
     - 127.0.0.1:${QDRANT_PORT:-6333}:6333
     volumes:
     - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
   ollama:
-    image: ${OLLAMA_IMAGE:-ollama/ollama:0.32.14}
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.32.14@sha256:9d30908e41144b1f1da89b9d8e33c07e4aeb43ff41a8660241b1686e2cc330ad}
     restart: unless-stopped
     profiles:
     - infra
@@ -20,18 +25,27 @@ services:
     - 127.0.0.1:${OLLAMA_PORT:-11434}:11434
     volumes:
     - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
   synapse-service:
     build:
       context: .
       dockerfile: Dockerfile
     image: ${SYNAPSE_SERVICE_IMAGE:-synapse-service:local}
+    user: ${SYNAPSE_CONTAINER_UID:-1000}:${SYNAPSE_CONTAINER_GID:-1000}
     restart: unless-stopped
     profiles:
     - full
     depends_on:
-    - qdrant
-    - ollama
-    - wikijs
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      wikijs:
+        condition: service_healthy
     ports:
     - 127.0.0.1:${SYNAPSE_SERVICE_PORT:-15515}:8080
     environment:
@@ -44,7 +58,7 @@ services:
       OLLAMA_ANSWER_NUM_PREDICT: ${OLLAMA_ANSWER_NUM_PREDICT:-256}
       WIKIJS_BASE_URL: http://wikijs:3000
       WIKIJS_PUBLIC_BASE_URL: ${WIKIJS_PUBLIC_BASE_URL:-}
-      WIKIJS_API_TOKEN: ${WIKIJS_API_TOKEN:-replace-after-wikijs-admin-setup}
+      WIKIJS_API_TOKEN_FILE: /run/secrets/wikijs_api_token
       WIKIJS_LOCALE: ${WIKIJS_LOCALE:-en}
       QDRANT_BASE_URL: http://qdrant:6333
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-synapse_notes__nomic_embed_text__768}
@@ -57,6 +71,7 @@ services:
       SYNAPSE_MAX_CONTENT_BYTES: ${SYNAPSE_MAX_CONTENT_BYTES:-262144}
       SYNAPSE_MAX_CHUNKS_PER_NOTE: ${SYNAPSE_MAX_CHUNKS_PER_NOTE:-32}
       SYNAPSE_MAX_QUESTION_LENGTH: ${SYNAPSE_MAX_QUESTION_LENGTH:-1000}
+      SYNAPSE_MAX_REQUEST_BYTES: ${SYNAPSE_MAX_REQUEST_BYTES:-1048576}
       SYNAPSE_MAX_PARALLEL_EXECUTIONS: ${SYNAPSE_MAX_PARALLEL_EXECUTIONS:-2}
       SYNAPSE_EMBED_BATCH_SIZE: ${SYNAPSE_EMBED_BATCH_SIZE:-16}
       SYNAPSE_HTTP_TIMEOUT_SECONDS: ${SYNAPSE_HTTP_TIMEOUT_SECONDS:-180}
@@ -65,15 +80,17 @@ services:
       RAG_QUOTE_OVERLAP_THRESHOLD: ${RAG_QUOTE_OVERLAP_THRESHOLD:-0.3}
       SYNAPSE_SERVICE_PORT: 8080
       SYNAPSE_CONTAINER_BIND: 'true'
-      SYNAPSE_WEBHOOK_AUTH_TOKEN: ${SYNAPSE_WEBHOOK_AUTH_TOKEN:?set SYNAPSE_WEBHOOK_AUTH_TOKEN in .env; use SYNAPSE_AUTH_DISABLED=true only for no-network demo workflows}
+      SYNAPSE_WEBHOOK_AUTH_TOKEN_FILE: /run/secrets/synapse_webhook_auth_token
       SYNAPSE_AUTH_DISABLED: ${SYNAPSE_AUTH_DISABLED:-false}
+    volumes:
+    - ${SYNAPSE_SECRET_DIR:?set SYNAPSE_SECRET_DIR in .env}:/run/secrets:ro,z
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=5)"]
       interval: 10s
       timeout: 5s
       retries: 12
   wikijs-db:
-    image: ${WIKIJS_POSTGRES_IMAGE:-postgres:16-alpine}
+    image: ${WIKIJS_POSTGRES_IMAGE:-postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685}
     restart: unless-stopped
     profiles:
     - infra
@@ -81,9 +98,10 @@ services:
     environment:
       POSTGRES_DB: ${WIKIJS_DB_NAME:-wiki}
       POSTGRES_USER: ${WIKIJS_DB_USER:-wikijs}
-      POSTGRES_PASSWORD: ${WIKIJS_DB_PASSWORD}
+      POSTGRES_PASSWORD_FILE: /run/secrets/wikijs_db_password
     volumes:
     - wikijs-db-data:/var/lib/postgresql/data
+    - ${SYNAPSE_SECRET_DIR:?set SYNAPSE_SECRET_DIR in .env}:/run/secrets:ro,z
     healthcheck:
       test:
       - CMD-SHELL
@@ -92,7 +110,8 @@ services:
       timeout: 5s
       retries: 20
   wikijs:
-    image: ${WIKIJS_IMAGE:-ghcr.io/requarks/wiki:2.5.314}
+    image: ${WIKIJS_IMAGE:-ghcr.io/requarks/wiki:2.5.314@sha256:68f0d1848261ae76492ba358e30a96a76fed5d97a3fff381656082bf90f70d7e}
+    user: ${SYNAPSE_CONTAINER_UID:-1000}:${SYNAPSE_CONTAINER_GID:-1000}
     restart: unless-stopped
     profiles:
     - infra
@@ -107,11 +126,14 @@ services:
       DB_HOST: wikijs-db
       DB_PORT: 5432
       DB_USER: ${WIKIJS_DB_USER:-wikijs}
-      DB_PASS: ${WIKIJS_DB_PASSWORD}
       DB_NAME: ${WIKIJS_DB_NAME:-wiki}
       NODE_OPTIONS: --no-deprecation
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["export DB_PASS=$$(cat /run/secrets/wikijs_db_password); exec node --no-deprecation server"]
+    volumes:
+    - ${SYNAPSE_SECRET_DIR:?set SYNAPSE_SECRET_DIR in .env}:/run/secrets:ro,z
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/healthz >/dev/null || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 20

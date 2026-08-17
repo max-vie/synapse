@@ -71,6 +71,21 @@ def load_dotenv(env_path: Path | None = None) -> None:
         value = _parse_env_value(value)
         if key and key not in os.environ:
             os.environ[key] = value
+    for key in ("SYNAPSE_WEBHOOK_AUTH_TOKEN", "WIKIJS_API_TOKEN", "WIKIJS_DB_PASSWORD"):
+        if key in os.environ and os.environ[key]:
+            continue
+        file_path = os.environ.get(f"{key}_FILE", "")
+        if not file_path:
+            continue
+        path = Path(file_path)
+        if not path.is_absolute():
+            path = env_path.parent / path
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if value:
+            os.environ[key] = value
 
 
 # Backward-compatible internal name used by older tests/imports.

@@ -26,6 +26,7 @@ if __package__ in (None, ""):
 
 from scripts.benchmark import report  # noqa: E402
 from scripts.benchmark.constants import BENCHMARK_REPORT_PATH, DEFAULT_OUTPUT_DIR, MATRIX_PATH, ROOT  # noqa: E402
+from scripts.lab import envfile  # noqa: E402
 from scripts.lab.runtime import Lab  # noqa: E402
 
 OUTPUT_DIR = DEFAULT_OUTPUT_DIR
@@ -51,16 +52,9 @@ def redact(text: str, env: dict[str, str] | None = None) -> str:
 
 
 def load_dotenv(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
     if not path.exists():
-        return values
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip().strip('"').strip("'")
-    return values
+        return {}
+    return envfile.resolve_secret_values(envfile.load(path), env_path=path)
 
 
 def set_env_values(path: Path, updates: dict[str, str]) -> None:

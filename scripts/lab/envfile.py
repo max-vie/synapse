@@ -13,6 +13,16 @@ class EnvFileError(ValueError):
     """Raised when a local environment file is missing or malformed."""
 
 
+SECRET_FILES = {
+    "SYNAPSE_WEBHOOK_AUTH_TOKEN": "synapse_webhook_auth_token",
+    "WIKIJS_DB_PASSWORD": "wikijs_db_password",
+    "WIKIJS_API_TOKEN": "wikijs_api_token",
+}
+SECRET_DIR_KEY = "SYNAPSE_SECRET_DIR"
+SECRET_FILE_MODE = 0o640
+SECRET_DIR_MODE = 0o700
+
+
 def parse_value(raw: str) -> str:
     raw = raw.strip()
     if not raw:
@@ -56,18 +66,150 @@ def _atomic_write(path: Path, text: str, *, mode: int = 0o600) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
+def _secret_dir(values: Mapping[str, str], *, env_path: Path) -> Path:
+    raw = str(values.get(SECRET_DIR_KEY) or "secrets").strip()
+    directory = Path(raw)
+    return directory if directory.is_absolute() else env_path.parent / directory
+
+
+def _secret_path(values: Mapping[str, str], key: str, *, env_path: Path) -> Path:
+    explicit = str(values.get(f"{key}_FILE") or "").strip()
+    if explicit:
+        path = Path(explicit)
+        return path if path.is_absolute() else env_path.parent / path
+    return _secret_dir(values, env_path=env_path) / SECRET_FILES[key]
+
+
+def write_secret(path: Path, key: str, value: str) -> Path:
+    """Write one managed secret and update the environment file to reference it."""
+    if key not in SECRET_FILES:
+        raise EnvFileError(f"unsupported managed secret: {key}")
+    values = load(path)
+    secret_path = _secret_path(values, key, env_path=path)
+    secret_path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(secret_path.parent, SECRET_DIR_MODE)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+    _atomic_write(secret_path, f"{value.rstrip(chr(10))}\n", mode=SECRET_FILE_MODE)
+    updates = {
+        SECRET_DIR_KEY: str(_secret_dir(values, env_path=path)),
+        f"{key}_FILE": str(secret_path),
+        key: "",
+    }
+    write_values(path, updates)
+    return secret_path
+
+
+def migrate_legacy_secrets(path: Path) -> bool:
+    """Move inline legacy secrets into ignored files; return whether the env changed."""
+    values = load(path)
+    changed = False
+    secret_dir = _secret_dir(values, env_path=path)
+    secret_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(secret_dir, SECRET_DIR_MODE)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+    updates: dict[str, str] = {
+        SECRET_DIR_KEY: str(secret_dir),
+        "SYNAPSE_CONTAINER_UID": str(values.get("SYNAPSE_CONTAINER_UID") or os.getuid()),
+        "SYNAPSE_CONTAINER_GID": str(values.get("SYNAPSE_CONTAINER_GID") or os.getgid()),
+    }
+    for key in SECRET_FILES:
+        value = str(values.get(key) or "")
+        secret_path = _secret_path(values, key, env_path=path)
+        if value and (not secret_path.exists() or not secret_path.read_text(encoding="utf-8").strip()):
+            _atomic_write(secret_path, f"{value}\n", mode=SECRET_FILE_MODE)
+            changed = True
+        if values.get(f"{key}_FILE") != str(secret_path):
+            changed = True
+        if value:
+            changed = True
+        updates[f"{key}_FILE"] = str(secret_path)
+        updates[key] = ""
+    if changed or SECRET_DIR_KEY not in values or "SYNAPSE_CONTAINER_UID" not in values or "SYNAPSE_CONTAINER_GID" not in values:
+        write_values(path, updates)
+    return changed
+
+
+def resolve_secret_values(values: Mapping[str, str], *, env_path: Path | None = None) -> dict[str, str]:
+    """Return environment values with managed file-backed secrets loaded."""
+    resolved = dict(values)
+    anchor = (env_path or Path.cwd() / ".env").resolve()
+    for key in SECRET_FILES:
+        path = _secret_path(resolved, key, env_path=anchor)
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            value = ""
+        if value:
+            resolved[key] = value
+    return resolved
+
+
 def create_from_template(template: Path, destination: Path, *, force: bool = False) -> bool:
     """Create a private environment file; return False when it already exists."""
     if destination.exists() and not force:
         return False
     text = template.read_text(encoding="utf-8")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    values = load(template)
+    secret_dir = destination.parent / "secrets"
+    secret_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(secret_dir, SECRET_DIR_MODE)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
     output: list[str] = []
+    secret_dir_seen = False
+    secret_keys_seen: set[str] = set()
+    container_uid_seen = False
+    container_gid_seen = False
     for line in text.splitlines():
-        if line.startswith("SYNAPSE_WEBHOOK_AUTH_TOKEN="):
-            line = f"SYNAPSE_WEBHOOK_AUTH_TOKEN={secrets.token_urlsafe(48)}"
-        elif line.startswith("WIKIJS_DB_PASSWORD="):
-            line = f"WIKIJS_DB_PASSWORD={secrets.token_urlsafe(24)}"
+        stripped = line.strip()
+        if stripped.startswith(f"{SECRET_DIR_KEY}="):
+            line = f"{SECRET_DIR_KEY}={secret_dir}"
+            secret_dir_seen = True
+        elif stripped.startswith("SYNAPSE_CONTAINER_UID="):
+            line = f"SYNAPSE_CONTAINER_UID={os.getuid()}"
+            container_uid_seen = True
+        elif stripped.startswith("SYNAPSE_CONTAINER_GID="):
+            line = f"SYNAPSE_CONTAINER_GID={os.getgid()}"
+            container_gid_seen = True
+        for key, filename in SECRET_FILES.items():
+            if stripped.startswith(f"{key}="):
+                secret_keys_seen.add(key)
+                value = values.get(key, "")
+                if key == "SYNAPSE_WEBHOOK_AUTH_TOKEN":
+                    value = secrets.token_urlsafe(48)
+                elif key == "WIKIJS_DB_PASSWORD":
+                    value = secrets.token_urlsafe(24)
+                elif not value:
+                    value = "replace-after-wikijs-admin-setup"
+                _atomic_write(secret_dir / filename, f"{value}\n", mode=SECRET_FILE_MODE)
+                line = f"{key}_FILE={secret_dir / filename}"
+                break
+            if stripped.startswith(f"{key}_FILE="):
+                secret_keys_seen.add(key)
+                value = values.get(key, "")
+                if key == "SYNAPSE_WEBHOOK_AUTH_TOKEN":
+                    value = secrets.token_urlsafe(48)
+                elif key == "WIKIJS_DB_PASSWORD":
+                    value = secrets.token_urlsafe(24)
+                elif not value:
+                    value = "replace-after-wikijs-admin-setup"
+                _atomic_write(secret_dir / filename, f"{value}\n", mode=SECRET_FILE_MODE)
+                line = f"{key}_FILE={secret_dir / filename}"
+                break
         output.append(line)
+    if not secret_dir_seen:
+        output.append(f"{SECRET_DIR_KEY}={secret_dir}")
+    if not container_uid_seen:
+        output.append(f"SYNAPSE_CONTAINER_UID={os.getuid()}")
+    if not container_gid_seen:
+        output.append(f"SYNAPSE_CONTAINER_GID={os.getgid()}")
+    for key, filename in SECRET_FILES.items():
+        if key in secret_keys_seen:
+            continue
+        value = "replace-after-wikijs-admin-setup"
+        if key == "SYNAPSE_WEBHOOK_AUTH_TOKEN":
+            value = secrets.token_urlsafe(48)
+        elif key == "WIKIJS_DB_PASSWORD":
+            value = secrets.token_urlsafe(24)
+        _atomic_write(secret_dir / filename, f"{value}\n", mode=SECRET_FILE_MODE)
+        output.append(f"{key}_FILE={secret_dir / filename}")
     _atomic_write(destination, "\n".join(output) + "\n")
     return True
 

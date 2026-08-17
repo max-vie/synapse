@@ -1,7 +1,7 @@
 name: synapse-ci-e2e
 services:
   mock-ollama:
-    image: ${MOCK_OLLAMA_IMAGE:-python:3.13-slim}
+    image: ${MOCK_OLLAMA_IMAGE:-python:3.13-slim@sha256:ffb752e139c0a19692a43af8d8523b274222dd68eebad5d583b45c2201c6e30a}
     working_dir: /app/scripts/proof
     command: python mock_ollama.py --host '' --port 11435
     expose:
@@ -15,20 +15,26 @@ services:
       retries: 12
 
   qdrant:
-    image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.19.0}
+    image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc}
     ports:
       - 127.0.0.1:${QDRANT_PORT:-6633}:6333
     volumes:
       - qdrant-ci-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   synapse-service:
     build:
       context: .
       dockerfile: Dockerfile
     image: ${SYNAPSE_SERVICE_IMAGE:-synapse-service:local}
+    user: ${SYNAPSE_CONTAINER_UID:-1000}:${SYNAPSE_CONTAINER_GID:-1000}
     depends_on:
       qdrant:
-        condition: service_started
+        condition: service_healthy
       mock-ollama:
         condition: service_healthy
     ports:
@@ -57,10 +63,13 @@ services:
       SYNAPSE_EMBED_BATCH_SIZE: '8'
       SYNAPSE_SERVICE_PORT: 8080
       SYNAPSE_CONTAINER_BIND: 'true'
-      SYNAPSE_WEBHOOK_AUTH_TOKEN: ${SYNAPSE_WEBHOOK_AUTH_TOKEN:-ci-e2e-token}
+      SYNAPSE_WEBHOOK_AUTH_TOKEN_FILE: /run/secrets/synapse_webhook_auth_token
       SYNAPSE_AUTH_DISABLED: 'false'
+      SYNAPSE_MAX_REQUEST_BYTES: ${SYNAPSE_MAX_REQUEST_BYTES:-1048576}
       SYNAPSE_ANSWER_VALIDATION: ${SYNAPSE_ANSWER_VALIDATION:-structural}
       RAG_QUOTE_OVERLAP_THRESHOLD: ${RAG_QUOTE_OVERLAP_THRESHOLD:-0.3}
+    volumes:
+      - ${SYNAPSE_SECRET_DIR:?set SYNAPSE_SECRET_DIR}:/run/secrets:ro,z
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=5)"]
       interval: 10s

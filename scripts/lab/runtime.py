@@ -72,15 +72,18 @@ class Lab:
 
     def initialize(self, *, force: bool = False) -> bool:
         created = envfile.create_from_template(self.root / ".env.example", self.env_path, force=force)
+        migrated = envfile.migrate_legacy_secrets(self.env_path)
         if created:
             print(f"[OK] Created private environment file: {self.env_path}")
         else:
             print(f"[OK] Using existing environment file: {self.env_path}")
-        return created
+        if migrated:
+            print(f"[OK] Migrated inline secrets to: {envfile._secret_dir(envfile.load(self.env_path), env_path=self.env_path)}")
+        return created or migrated
 
     def environment(self) -> dict[str, str]:
         try:
-            return envfile.load(self.env_path)
+            return envfile.resolve_secret_values(envfile.load(self.env_path), env_path=self.env_path)
         except envfile.EnvFileError as exc:
             raise LabError(str(exc)) from exc
 
@@ -264,7 +267,6 @@ class Lab:
                 "COMPOSE_PROJECT_NAME": "synapse-ci-e2e",
                 "SYNAPSE_SERVICE_PORT": "6578",
                 "QDRANT_PORT": "6633",
-                "SYNAPSE_WEBHOOK_AUTH_TOKEN": "ci-e2e-token",
                 "OLLAMA_INTERNAL_BASE_URL": "http://mock-ollama:11435",
                 "OLLAMA_CHAT_BASE_URL": "http://mock-ollama:11435",
                 "OLLAMA_HOST_BASE_URL": "",
@@ -278,6 +280,7 @@ class Lab:
                 "OBSIDIAN_VAULT_PATH": "examples/obsidian-vault",
             },
         )
+        envfile.write_secret(ci_env, "SYNAPSE_WEBHOOK_AUTH_TOKEN", "ci-e2e-token")
         ci = Lab(root=self.root, env_path=ci_env, compose_path=self.root / "docker-compose.ci-e2e.yml", run=self._run, sleep=self._sleep)
         try:
             ci.compose("up", "-d", "--build", "qdrant", "mock-ollama", "synapse-service")

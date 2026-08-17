@@ -41,6 +41,7 @@ from scripts.benchmark.constants import (  # noqa: E402
 )
 from scripts.proof.scoring import aggregate_scores, score_answer  # noqa: E402
 from scripts.proof.redaction import redact_sensitive  # noqa: E402
+from scripts.lab import envfile  # noqa: E402
 
 REPORT_PATH = BENCHMARK_REPORT_PATH
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
@@ -487,19 +488,10 @@ def cmd_extract(args: argparse.Namespace) -> int:
 
 def load_env_safely() -> dict[str, str]:
     env_path = ROOT / ".env"
-    env: dict[str, str] = {}
     if not env_path.exists():
-        return env
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"\'')
-        if key in SAFE_ENV_KEYS:
-            env[key] = value
-    return env
+        return {}
+    values = envfile.resolve_secret_values(envfile.load(env_path), env_path=env_path)
+    return {key: values[key] for key in SAFE_ENV_KEYS if values.get(key)}
 
 
 def cmd_rag(args: argparse.Namespace) -> int:

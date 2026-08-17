@@ -23,7 +23,7 @@ RequestJson = Callable[[str, dict[str, Any] | None, str | None], dict[str, Any]]
 
 def load_dotenv(path: Path) -> dict[str, str]:
     try:
-        return envfile.load(path)
+        return envfile.resolve_secret_values(envfile.load(path), env_path=path)
     except envfile.EnvFileError as exc:
         raise SystemExit(str(exc)) from exc
 

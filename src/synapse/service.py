@@ -28,6 +28,8 @@ from .upstream import UpstreamError
 
 app = FastAPI(title="Synapse API", version=__version__)
 
+DEFAULT_MAX_REQUEST_BYTES = 1_048_576
+
 
 def _max_parallel() -> int:
     try:
@@ -43,6 +45,10 @@ class BusyError(ValueError):
     """Raised when the local lab work queue is full."""
 
 
+class RequestTooLargeError(ValueError):
+    """Raised before parsing a request body that exceeds the configured limit."""
+
+
 def _run_limited(handler: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     if not _WORK_SEMAPHORE.acquire(blocking=False):
         raise BusyError("too many concurrent Synapse requests; retry later")
@@ -53,7 +59,27 @@ def _run_limited(handler: Callable[[], dict[str, Any]]) -> dict[str, Any]:
 
 
 async def _read_body_json(request: Request) -> dict[str, Any]:
-    raw = await request.body()
+    try:
+        max_bytes = max(0, int(float(os.environ.get("SYNAPSE_MAX_REQUEST_BYTES", str(DEFAULT_MAX_REQUEST_BYTES)))))
+    except ValueError:
+        max_bytes = DEFAULT_MAX_REQUEST_BYTES
+    content_length = request.headers.get("content-length")
+    if max_bytes and content_length:
+        try:
+            declared_length = int(content_length)
+        except ValueError:
+            declared_length = None
+        if declared_length is not None and declared_length > max_bytes:
+            raise RequestTooLargeError(f"request body exceeds max_request_bytes={max_bytes}")
+
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if max_bytes and size > max_bytes:
+            raise RequestTooLargeError(f"request body exceeds max_request_bytes={max_bytes}")
+        chunks.append(chunk)
+    raw = b"".join(chunks)
     if not raw:
         return {}
     parsed = json.loads(raw.decode("utf-8"))
@@ -86,7 +112,7 @@ def _auth_disabled(env: Mapping[str, str] = os.environ) -> bool:
 
 
 def _expected_token(env: Mapping[str, str] = os.environ) -> str:
-    return env.get("SYNAPSE_WEBHOOK_AUTH_TOKEN", "")
+    return Settings.from_env(env).get("SYNAPSE_WEBHOOK_AUTH_TOKEN", "")
 
 
 def _supplied_token(request: Request) -> str:
@@ -184,7 +210,7 @@ def _check_readiness(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     # Wiki.js degradation: not-ready only when publishing is enabled
     # (token present and not a placeholder). Without publishing, wikijs
     # failure is informational but does not block readiness.
-    token = env.get("WIKIJS_API_TOKEN", "")
+    token = Settings.from_env(env).get("WIKIJS_API_TOKEN", "")
     publishing_enabled = bool(token and not token.startswith("replace-"))
     if publishing_enabled and not wikijs_ok:
         all_ok = False
@@ -205,6 +231,8 @@ async def _handle_ask(request: Request) -> JSONResponse:
     """Internal ask handler: parse body, dispatch to ask module."""
     try:
         body = await _read_body_json(request)
+    except RequestTooLargeError as error:
+        return _json_error(413, "payload_too_large", str(error))
     except json.JSONDecodeError as error:
         return _json_error(400, "bad_request", f"invalid JSON: {error.msg}")
     except ValueError as error:
@@ -216,6 +244,8 @@ async def _handle_notes(request: Request) -> JSONResponse:
     """Internal notes handler: list Markdown notes present in the live index."""
     try:
         body = await _read_body_json(request)
+    except RequestTooLargeError as error:
+        return _json_error(413, "payload_too_large", str(error))
     except json.JSONDecodeError as error:
         return _json_error(400, "bad_request", f"invalid JSON: {error.msg}")
     except ValueError as error:
@@ -227,6 +257,8 @@ async def _handle_ingest(request: Request) -> JSONResponse:
     """Internal ingest handler: parse body, dispatch to ingest module."""
     try:
         body = await _read_body_json(request)
+    except RequestTooLargeError as error:
+        return _json_error(413, "payload_too_large", str(error))
     except json.JSONDecodeError as error:
         return _json_error(400, "bad_request", f"invalid JSON: {error.msg}")
     except ValueError as error:
@@ -275,6 +307,8 @@ async def webhook_index_note_endpoint(request: Request) -> JSONResponse:
         return auth_err
     try:
         body = await _read_body_json(request)
+    except RequestTooLargeError as error:
+        return _json_error(413, "payload_too_large", str(error))
     except json.JSONDecodeError as error:
         return _json_error(400, "bad_request", f"invalid JSON: {error.msg}")
     except ValueError as error:
@@ -295,6 +329,8 @@ def create_app(runtime: SynapseRuntime | None = None) -> FastAPI:
             return _json_error(401, "unauthorized", error)
         try:
             body = await _read_body_json(request)
+        except RequestTooLargeError as exc:
+            return _json_error(413, "payload_too_large", str(exc))
         except json.JSONDecodeError as exc:
             return _json_error(400, "bad_request", f"invalid JSON: {exc.msg}")
         except ValueError as exc:
