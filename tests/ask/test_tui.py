@@ -1,14 +1,9 @@
 import curses
-import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
-ASK_DIR = Path(__file__).resolve().parents[1] / "Ask"
-if str(ASK_DIR) not in sys.path:
-    sys.path.insert(0, str(ASK_DIR))
 
 from synapse_ask import cli as ask_cli  # noqa: E402
 from synapse_ask import tui_render as ask_tui_render  # noqa: E402
@@ -513,6 +508,7 @@ def test_submit_tui_question_animates_visible_thinking_while_live_request_is_pen
 
     monkeypatch.setattr(ask_tui_runner, "ask_question", fake_ask_question)
     monkeypatch.setattr(ask_tui_runner, "THINKING_FRAME_DELAY", 0.005)
+    monkeypatch.setattr(ask_tui_runner, "ANSWER_REVEAL_DELAY", 0)
 
     ask_tui_runner.submit_tui_question(
         state,
@@ -690,6 +686,7 @@ def test_submit_tui_question_refuses_live_answer_without_sources(monkeypatch):
         }
 
     monkeypatch.setattr(ask_tui_runner, "ask_question", fake_ask_question)
+    monkeypatch.setattr(ask_tui_runner, "ANSWER_REVEAL_DELAY", 0)
 
     ask_tui_runner.submit_tui_question(
         state,

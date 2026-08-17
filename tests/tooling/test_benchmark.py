@@ -400,3 +400,413 @@ def test_render_uses_workflow_selection_to_classify_failed_complex_runs():
 
     assert "`failed-before-evidence`" not in fresh_section
     assert "`failed-before-evidence`" in complex_section
+from scripts.proof.scoring import (
+    detect_forbidden,
+    detect_redaction_expansion,
+    detect_required,
+    detect_secret_invention,
+    is_insufficient_answer,
+    score_answer,
+)
+
+
+def test_required_and_forbidden_detection():
+    text = "Current codename ORCHID-17A uses synapse_benchmark_notes."
+    found, missing = detect_required(text, ["ORCHID-17A", "synapse_benchmark_notes", "missing fact"])
+    assert found == ["ORCHID-17A", "synapse_benchmark_notes"]
+    assert missing == ["missing fact"]
+    assert detect_forbidden(text, ["ORCH1D-17A", "synapse_benchmark_notes"]) == ["synapse_benchmark_notes"]
+
+
+def test_score_answer_passes_expected_facts():
+    result = score_answer(
+        "The current codename is ORCHID-17A and the collection is synapse_benchmark_notes.",
+        {
+            "required_facts": ["ORCHID-17A", "synapse_benchmark_notes"],
+            "forbidden_facts": ["ORCH1D-17A", "synapse_notes_old"],
+        },
+    )
+    assert result.passed
+    assert result.score == 100
+
+
+def test_score_answer_fails_forbidden_and_missing():
+    result = score_answer(
+        "The old codename is ORCH1D-17A.",
+        {"required_facts": ["ORCHID-17A"], "forbidden_facts": ["ORCH1D-17A"]},
+    )
+    assert not result.passed
+    assert "ORCHID-17A" in result.required_missing
+    assert "ORCH1D-17A" in result.forbidden_found
+
+
+def test_wrong_source_path_detected_when_required():
+    result = score_answer(
+        "Answer cites scripts/benchmark/fixtures/notes/stale-plan-distractor.md",
+        {
+            "required_facts": ["Answer"],
+            "forbidden_facts": [],
+            "expected_sources": ["scripts/benchmark/fixtures/notes/newer-evidence-report.md"],
+            "required_source_count": 1,
+        },
+        require_sources=True,
+    )
+    assert not result.passed
+    assert result.source_errors
+
+
+def test_source_scoring_requires_valid_inline_citation_number():
+    result = score_answer(
+        '{"answer": "OSPF uses Dijkstra SPF. [99]", "sources": [{"source_path": "Synapse-Demo/ospf.md"}]}',
+        {
+            "required_facts": ["Dijkstra SPF"],
+            "forbidden_facts": [],
+            "expected_sources": ["Synapse-Demo/ospf.md"],
+            "required_source_count": 1,
+        },
+        require_sources=True,
+    )
+
+    assert not result.passed
+    assert "invalid source citation(s): 99" in result.source_errors
+
+
+def test_source_scoring_accepts_expected_source_at_second_returned_index():
+    result = score_answer(
+        '{"answer": "OSPF uses Dijkstra SPF. [2]", "sources": [{"source_path": "Synapse-Demo/distractor.md"}, {"source_path": "Synapse-Demo/ospf.md"}]}',
+        {
+            "required_facts": ["Dijkstra SPF"],
+            "forbidden_facts": [],
+            "expected_sources": ["Synapse-Demo/ospf.md"],
+            "required_source_count": 1,
+        },
+        require_sources=True,
+    )
+
+    assert result.passed
+
+
+def test_source_scoring_fails_when_no_sources_returned_even_if_answer_mentions_path():
+    result = score_answer(
+        '{"answer": "OSPF uses Dijkstra SPF from Synapse-Demo/ospf.md. [1]", "sources": []}',
+        {
+            "required_facts": ["Dijkstra SPF"],
+            "forbidden_facts": [],
+            "expected_sources": ["Synapse-Demo/ospf.md"],
+            "required_source_count": 1,
+        },
+        require_sources=True,
+    )
+
+    assert not result.passed
+    assert "invalid source citation(s): 1" in result.source_errors
+
+
+def test_source_scoring_requires_requested_number_of_cited_sources():
+    result = score_answer(
+        '{"answer": "OSPF and BGP facts are present. [1]", "sources": [{"source_path": "Synapse-Demo/ospf.md"}, {"source_path": "Synapse-Demo/bgp.md"}]}',
+        {
+            "required_facts": ["OSPF", "BGP"],
+            "forbidden_facts": [],
+            "expected_sources": ["Synapse-Demo/ospf.md", "Synapse-Demo/bgp.md"],
+            "required_source_count": 2,
+        },
+        require_sources=True,
+    )
+
+    assert not result.passed
+    assert "expected at least 2 cited source(s), found 1" in result.source_errors
+
+
+def test_source_scoring_does_not_count_expected_path_mentioned_in_answer_as_returned_source():
+    result = score_answer(
+        '{"answer": "OSPF uses Dijkstra SPF from Synapse-Demo/ospf.md. [1]", "sources": [{"source_path": "Synapse-Demo/distractor.md"}]}',
+        {
+            "required_facts": ["Dijkstra SPF"],
+            "forbidden_facts": [],
+            "expected_sources": ["Synapse-Demo/ospf.md"],
+            "required_source_count": 1,
+        },
+        require_sources=True,
+    )
+
+    assert not result.passed
+    assert "expected at least 1 source(s), found 0" in result.source_errors
+
+
+def test_source_scoring_requires_exact_source_path_not_substring():
+    result = score_answer(
+        '{"answer": "OSPF uses Dijkstra SPF. [1]", "sources": [{"source_path": "Synapse-Demo/ospf.md.bak"}]}',
+        {
+            "required_facts": ["Dijkstra SPF"],
+            "forbidden_facts": [],
+            "expected_sources": ["Synapse-Demo/ospf.md"],
+            "required_source_count": 1,
+        },
+        require_sources=True,
+    )
+
+    assert not result.passed
+    assert "expected at least 1 source(s), found 0" in result.source_errors
+
+
+def test_source_scoring_requires_match_in_source_path_not_title_metadata():
+    result = score_answer(
+        '{"answer": "OSPF uses Dijkstra SPF. [1]", "sources": [{"title": "mentions Synapse-Demo/ospf.md", "source_path": "Synapse-Demo/stale.md"}]}',
+        {
+            "required_facts": ["Dijkstra SPF"],
+            "forbidden_facts": [],
+            "expected_sources": ["Synapse-Demo/ospf.md"],
+            "required_source_count": 1,
+        },
+        require_sources=True,
+    )
+
+    assert not result.passed
+    assert "expected at least 1 source(s), found 0" in result.source_errors
+
+
+def test_source_scoring_ignores_numeric_brackets_in_source_metadata():
+    result = score_answer(
+        '{"answer": "OSPF uses Dijkstra SPF. [1]", "sources": [{"title": "OSPF note [99]", "source_path": "Synapse-Demo/ospf.md"}]}',
+        {
+            "required_facts": ["Dijkstra SPF"],
+            "forbidden_facts": [],
+            "expected_sources": ["Synapse-Demo/ospf.md"],
+            "required_source_count": 1,
+        },
+        require_sources=True,
+    )
+
+    assert result.passed
+
+
+def test_source_scoring_rejects_out_of_range_citation_before_final_citation():
+    result = score_answer(
+        '{"answer": "OSPF uses Dijkstra SPF. [99]. The valid source is cited later. [1]", "sources": [{"source_path": "Synapse-Demo/ospf.md"}]}',
+        {
+            "required_facts": ["Dijkstra SPF"],
+            "forbidden_facts": [],
+            "expected_sources": ["Synapse-Demo/ospf.md"],
+            "required_source_count": 1,
+        },
+        require_sources=True,
+    )
+
+    assert not result.passed
+    assert "invalid source citation(s): 99" in result.source_errors
+
+
+def test_unsupported_answer_behavior():
+    result = score_answer(
+        "Insufficient context. The notes do not provide a private lab password.",
+        {"type": "unsupported", "required_facts": ["Insufficient context"], "forbidden_facts": ["hunter2", "password is"]},
+    )
+    assert result.passed
+    assert is_insufficient_answer(result.required_found[0])
+
+
+def test_secret_and_redaction_detection():
+    assert detect_secret_invention("The API key is sk-live-1234567890")
+    assert detect_secret_invention("password is hunter2")
+    assert detect_redaction_expansion("expanded redaction: abc123")
+
+
+import argparse
+import json
+
+from scripts.benchmark import ollama_models
+
+
+class FakeResponse:
+    def __init__(self, body: str):
+        self.body = body.encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        return self.body
+
+
+def test_rag_benchmark_uses_synapse_webhook_auth_token(monkeypatch, tmp_path):
+    seen_headers = []
+
+    monkeypatch.setattr(
+        ollama_models,
+        "load_env_safely",
+        lambda: {"SYNAPSE_ASK_WEBHOOK_URL": "http://ask", "SYNAPSE_WEBHOOK_AUTH_TOKEN": "tok-secret"},
+    )
+    monkeypatch.setattr(
+        ollama_models,
+        "load_questions",
+        lambda: {
+            "questions": [
+                {
+                    "id": "q1",
+                    "question": "What is proven?",
+                    "required_facts": ["answer"],
+                    "forbidden_facts": [],
+                    "expected_sources": [],
+                    "required_source_count": 0,
+                }
+            ]
+        },
+    )
+
+    def fake_urlopen(req, timeout):
+        seen_headers.append(dict(req.header_items()))
+        return FakeResponse(json.dumps({"answer": "answer", "sources": []}))
+
+    monkeypatch.setattr(ollama_models.request, "urlopen", fake_urlopen)
+
+    code = ollama_models.cmd_rag(argparse.Namespace(output_dir=str(tmp_path)))
+
+    assert code == 0
+    lowered = {key.lower(): value for key, value in seen_headers[0].items()}
+    assert lowered["x-synapse-token"] == "tok-secret"
+
+
+def test_extract_workload_requires_sources_when_question_requires_sources(monkeypatch):
+    monkeypatch.setattr(
+        ollama_models,
+        "ollama_generate",
+        lambda *args, **kwargs: {"ok": True, "response": "The marker is ORCHID-17A.", "latency_s": 0.01},
+    )
+    question = {
+        "id": "source-required",
+        "question": "What is the marker?",
+        "required_facts": ["ORCHID-17A"],
+        "forbidden_facts": [],
+        "expected_sources": ["scripts/benchmark/fixtures/notes/newer-evidence-report.md"],
+        "required_source_count": 1,
+    }
+
+    result = ollama_models.run_extract_workload(
+        {"name": "fake", "timeout_seconds": 1},
+        {"user_template": "{context}\n{question}", "system": "", "options": {}},
+        [question],
+        "SOURCE: scripts/benchmark/fixtures/notes/newer-evidence-report.md\nORCHID-17A",
+        argparse.Namespace(timeout_scale=1.0),
+    )
+
+    assert result["passed"] is False
+    assert result["questions"][0]["score"]["source_errors"]
+
+
+def test_suite_benchmark_run_records_hardware_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setattr(ollama_models, "now_id", lambda: "20260101T000000Z")
+    monkeypatch.setattr(ollama_models, "hardware_info", lambda: {"cpu_count": 8, "platform": "test"})
+
+    path = ollama_models.write_run("suite", ["bench", "suite"], {"models": []}, tmp_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    assert payload["hardware"] == {"cpu_count": 8, "platform": "test"}
+
+
+def test_ollama_redact_hides_172_private_networks_in_errors():
+    private_ip = "172." + "20.5.9"
+
+    text = ollama_models.redact(f"HTTP 500 from http://{private_ip}:11434/api/generate")
+
+    assert private_ip not in text
+    assert "172.16.x.x" in text
+
+
+from pathlib import Path
+
+import yaml
+
+from scripts.benchmark.constants import (
+    MATRIX_PATH,
+    NOTES_DIR,
+    QUESTIONS_PATH,
+    STANDARD_EXTRACT_QUESTION_IDS,
+    STANDARD_FORMAT_NOTE_PATHS,
+    STANDARD_SUITE_ID,
+)
+from scripts.benchmark.ollama_models import standard_suite_spec
+
+MATRIX = MATRIX_PATH
+QUESTIONS = QUESTIONS_PATH
+
+
+def load_yaml(path: Path):
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def test_model_matrix_schema_and_default_safety():
+    data = load_yaml(MATRIX)
+    models = data["models"]
+    assert len(models) == 7
+    names = [m["name"] for m in models]
+    assert len(names) == len(set(names))
+    enabled = {m["name"] for m in models if m.get("enabled_by_default")}
+    assert enabled == {"tinyllama:latest", "gemma2:2b"}
+    large = [m for m in models if float(m.get("parameters_b") or 0) >= 24]
+    assert len(large) == 2
+    assert any(float(m["parameters_b"]) == 27 for m in large)
+    for model in models:
+        for key in ("name", "family", "tier", "roles", "source_url", "timeout_seconds"):
+            assert key in model, f"{model.get('name')} missing {key}"
+        assert model["source_url"].startswith("https://ollama.com/library/")
+        if float(model.get("parameters_b") or 0) >= 24:
+            assert not model.get("enabled_by_default"), model["name"]
+
+
+def test_fixture_notes_exist_and_are_sanitized():
+    notes = sorted(NOTES_DIR.glob("*.md"))
+    assert len(notes) >= 8
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in notes)
+    assert "[REDACTED]" in combined
+    assert "[TOKEN]" in combined
+    assert "```bash" in combined
+    assert "```mermaid" in combined
+    assert "---" in combined
+    assert "not " + "production-ready" in combined
+    assert "do not claim" in combined.lower()
+    assert "ORCHID-17A" in combined
+    assert "ORCH1D-17A" in combined
+    # Fixtures may include fake decoy strings, but must not contain obvious real private material.
+    assert "BEGIN PRIVATE KEY" not in combined
+    assert "ghp_" not in combined
+
+
+def test_questions_schema_is_rich_enough():
+    data = load_yaml(QUESTIONS)
+    questions = data["questions"]
+    assert len(questions) >= 10
+    required_facts = []
+    forbidden_facts = []
+    for q in questions:
+        for key in ("id", "type", "question", "expected_sources", "required_source_count", "required_facts", "forbidden_facts"):
+            assert key in q, f"{q.get('id')} missing {key}"
+        required_facts.extend(q["required_facts"])
+        forbidden_facts.extend(q["forbidden_facts"])
+    required_facts.extend(data["format_expectations"]["required_facts"])
+    forbidden_facts.extend(data["format_expectations"]["forbidden_facts"])
+    assert len(required_facts) >= 15
+    assert len(forbidden_facts) >= 20
+    assert any(q["type"] == "unsupported" for q in questions)
+    assert any("freshness_precedence" in q for q in questions)
+    assert any(q.get("source_path") for q in questions)
+    assert len(data["exact_preserve_blocks"]) >= 4
+
+
+def test_standard_suite_is_fixed_efficient_workflow_benchmark():
+    questions = load_yaml(QUESTIONS)["questions"]
+    spec = standard_suite_spec(questions=questions)
+    assert spec["suite_id"] == STANDARD_SUITE_ID
+    assert spec["workloads"] == ["smoke", "format", "extract"]
+    assert spec["format_note_count"] == 2
+    assert spec["format_notes"] == list(STANDARD_FORMAT_NOTE_PATHS)
+    assert spec["extract_question_count"] == len(questions)
+    assert spec["extract_question_ids"] == list(STANDARD_EXTRACT_QUESTION_IDS)
+    assert spec["extract_question_count"] >= 13
+    assert spec["same_suite_required"] is True
+    assert "formatting" in spec["workflow_checks"]
+    assert "grounded extraction" in spec["workflow_checks"]
+    assert "safety boundaries" in spec["workflow_checks"]

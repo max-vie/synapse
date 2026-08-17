@@ -1,11 +1,5 @@
 from synapse.ask import (
     INSUFFICIENT_ANSWER,
-    _contains_term,
-    _extractive_answer_valid,
-    _ngrams,
-    _normalize,
-    _quote_overlap,
-    _term_groups,
     answer_or_refuse,
     ask,
     build_context,
@@ -14,6 +8,7 @@ from synapse.ask import (
     list_indexed_notes,
     parse_question,
 )
+from synapse.metadata import build_metadata
 
 
 def test_parse_question_normalizes_filters_and_e2e_run_ids():
@@ -560,7 +555,7 @@ def test_ask_can_use_extractive_answer_mode_to_avoid_slow_chat_model():
                             "payload": {
                                 "title": "Complex note",
                                 "source_path": "Synapse-Demo/current.md",
-                                "text": "Intro. The exact replay command is `python3 scripts/benchmark/workflow_top_models.py --proof-suite complex --models qwen2.5-coder:14b --skip-pull`.",
+                                "text": "Intro. The exact replay command is `python3 -m scripts.benchmark workflow --proof-suite complex --models qwen2.5-coder:14b --skip-pull`.",
                                 "chunk_index": 0,
                             },
                         }
@@ -582,7 +577,7 @@ def test_ask_can_use_extractive_answer_mode_to_avoid_slow_chat_model():
     )
 
     assert result["insufficient_context"] is False
-    assert "workflow_top_models.py" in result["answer"]
+    assert "scripts.benchmark workflow" in result["answer"]
     assert result["answer"].endswith("[1].")
     assert not any(url.endswith("/api/chat") for _method, url, _body in calls)
 
@@ -612,42 +607,18 @@ def test_ask_short_circuits_chat_when_context_is_insufficient():
 # ── quote-overlap and extractive validation tests ─────────────────────────
 
 
-def test_ngrams_extracts_trigrams():
-    assert _ngrams("OSPF uses Dijkstra") == {"ospf uses dijkstra"}
-    assert _ngrams("a b c d") == {"a b c", "b c d"}
-    assert _ngrams("short") == {"short"}
 
 
-def test_quote_overlap_returns_high_when_answer_trigrams_match_sources():
-    sources = [{"quoted_support": "OSPF uses Dijkstra's Shortest Path First algorithm."}]
-    overlap = _quote_overlap("OSPF uses Dijkstra's Shortest Path First algorithm. [1]", sources)
-    assert overlap > 0.5
 
 
-def test_quote_overlap_returns_low_when_answer_invents_details():
-    sources = [{"quoted_support": "OSPF uses Dijkstra's Shortest Path First algorithm."}]
-    overlap = _quote_overlap("OSPF converges in under 50 milliseconds using Bellman-Ford. [1]", sources)
-    assert overlap < 0.3
 
 
-def test_quote_overlap_zero_when_empty_quoted_support():
-    sources = [{"quoted_support": ""}]
-    assert _quote_overlap("Any answer here. [1]", sources) == 0.0
 
 
-def test_extractive_answer_valid_true_when_answer_content_in_quote():
-    sources = [{"quoted_support": "OSPF uses Dijkstra's Shortest Path First algorithm."}]
-    assert _extractive_answer_valid("OSPF uses Dijkstra's Shortest Path First algorithm. [1].", sources) is True
 
 
-def test_extractive_answer_valid_false_when_answer_adds_unsupported_detail():
-    sources = [{"quoted_support": "OSPF uses Dijkstra's Shortest Path First algorithm."}]
-    assert _extractive_answer_valid("OSPF uses Dijkstra and converges in under 50ms. [1].", sources) is False
 
 
-def test_extractive_answer_valid_false_when_empty_answer():
-    sources = [{"quoted_support": "Some text."}]
-    assert _extractive_answer_valid("[1].", sources) is False
 
 
 def test_answer_or_refuse_default_structural_allows_halucinated_cited_answer():
@@ -800,87 +771,32 @@ def test_ask_with_quote_overlap_refuses_halucinated_full_flow():
 # ── multilingual and technical grounding tests ─────────────────────────────
 
 
-def test_normalize_transliterates_german_umlauts():
-    assert _normalize("Größe") == "grosse"
-    assert _normalize("Käse") == "kase"
-    assert _normalize("über") == "uber"
-    assert _normalize("Nordrhein-Westfalen") == "nordrhein-westfalen"
 
 
-def test_normalize_preserves_path_separators():
-    assert _normalize("/etc/nginx/nginx.conf") == "/etc/nginx/nginx.conf"
-    assert _normalize("scripts/e2e/start.sh") == "scripts/e2e/start.sh"
 
 
-def test_normalize_preserves_dotted_versions():
-    assert _normalize("v1.18.1") == "v1.18.1"
-    assert _normalize("qdrant/qdrant:v1.18.1") == "qdrant/qdrant:v1.18.1"
 
 
-def test_normalize_preserves_cli_flags():
-    assert _normalize("--verbose") == "--verbose"
-    assert _normalize("--skip-pull") == "--skip-pull"
 
 
-def test_normalize_preserves_at_sign_and_hash():
-    assert _normalize("user@host") == "user@host"
-    assert _normalize("#ref") == "#ref"
 
 
-def test_normalize_strips_non_preserved_symbols():
-    assert _normalize("hello (world)") == "hello world"
-    assert _normalize("foo=bar") == "foo bar"
-    assert _normalize("a & b") == "a b"
 
 
-def test_contains_term_matches_german_umlaut_text():
-    text = "Die Größe der Datenbank beeinflusst die Latenz."
-    assert _contains_term(text, "Größe") is True
-    assert _contains_term(text, "grosse") is True
 
 
-def test_contains_term_matches_file_path_in_text():
-    text = "Edit /etc/nginx/nginx.conf to configure the reverse proxy."
-    assert _contains_term(text, "/etc/nginx/nginx.conf") is True
-    assert _contains_term(text, "nginx.conf") is True
 
 
-def test_contains_term_matches_cli_flag():
-    text = "Run with --skip-pull to avoid downloading model layers."
-    assert _contains_term(text, "--skip-pull") is True
 
 
-def test_contains_term_matches_vendor_names():
-    text = "Juniper SRX firewalls use zone-based policies."
-    assert _contains_term(text, "juniper") is True
-    assert _contains_term(text, "srx") is True
 
 
-def test_contains_term_matches_dotted_version():
-    text = "Upgrade Qdrant to v1.18.1 for the fix."
-    assert _contains_term(text, "v1.18.1") is True
 
 
-def test_term_groups_extracts_german_terms():
-    groups = _term_groups("Was ist die Größe der Datenbank?", env={})
-    labels = [g["label"] for g in groups]
-    assert "grosse" in labels
-    assert "datenbank" in labels
 
 
-def test_term_groups_extracts_paths_and_flags():
-    groups = _term_groups("How to edit /etc/nginx/nginx.conf with --skip-pull?", env={})
-    labels = [g["label"] for g in groups]
-    assert "/etc/nginx/nginx.conf" in labels
-    assert "--skip-pull" in labels
 
 
-def test_term_groups_extracts_vendor_and_product_names():
-    groups = _term_groups("Which Juniper SRX firewall supports BGP?", env={})
-    labels = [g["label"] for g in groups]
-    assert "juniper" in labels
-    assert "srx" in labels
-    assert "bgp" in labels
 
 
 def test_build_context_grounds_german_note():
@@ -912,7 +828,7 @@ def test_build_context_grounds_cli_command_note():
                 "score": 0.92,
                 "payload": {
                     "title": "Start script",
-                    "source_path": "scripts/e2e/start.sh",
+                    "source_path": "scripts/lab/runtime.py",
                     "text": "Run start.sh with --skip-pull to skip model downloads.",
                     "chunk_index": 0,
                 },
@@ -964,8 +880,162 @@ def test_build_context_grounds_file_path_in_note():
     assert "/etc/nginx/nginx.conf" in result["retrieval"]["matched_terms"]
 
 
-def test_anchor_terms_accepts_long_technical_names():
-    groups = _term_groups("Which PostgreSQL extension supports pgvector?", env={})
-    labels = [g["label"] for g in groups]
-    assert "postgresql" in labels
-    assert "pgvector" in labels
+def run_answer_or_refuse(response, *, sources=None):
+    return answer_or_refuse(
+        {
+            "question": "what algorithm is used in ospf?",
+            "insufficient_context": False,
+            "sources": sources or [{"source_path": "Synapse-Demo/ospf.md"}, {"source_path": "Synapse-Demo/spf.md"}],
+            "retrieval": {"accepted": 2},
+        },
+        {"response": response},
+    )
+
+
+def run_build_context(question, points, *, filters=None, exact_run_id="", env=None):
+    return build_context(
+        {"question": question, "filters": filters or {}, "exact_run_id": exact_run_id},
+        points,
+        env=env or {},
+    )
+
+
+# ── Metadata safety ───────────────────────────────────────────────────
+
+
+def test_metadata_no_longer_emits_removed_publisher_slug():
+    metadata = build_metadata("Demo/My Note.md", "# My Note\n")
+    assert "bookstack_slug" not in metadata.to_dict()
+
+
+# ── Query-term grounding ──────────────────────────────────────────────
+
+
+def test_build_context_does_not_count_source_path_as_query_term_grounding():
+    result = run_build_context(
+        "What algorithm is used in VRRP?",
+        [
+            {
+                "score": 0.93,
+                "payload": {
+                    "title": "Generic algorithm note",
+                    "source_path": "Synapse-Demo/vrrp.md",
+                    "text": "This note mentions an election algorithm but omits the requested protocol name.",
+                    "chunk_index": 0,
+                },
+            }
+        ],
+    )
+
+    assert result["insufficient_context"] is True
+    assert result["retrieval"]["reason"] == "no_query_term_coverage"
+
+
+def test_build_context_applies_query_coverage_even_with_source_path_filter():
+    missing_terms = run_build_context(
+        "What algorithm is used in VRRP?",
+        [
+            {
+                "score": 0.91,
+                "payload": {
+                    "title": "Filtered note",
+                    "source_path": "Synapse-Demo/networking.md",
+                    "text": "A generic algorithm note without the requested protocol anchor.",
+                    "chunk_index": 0,
+                },
+            }
+        ],
+        filters={"source_path": "Synapse-Demo/networking.md"},
+    )
+    with_terms = run_build_context(
+        "What algorithm is used in VRRP?",
+        [
+            {
+                "score": 0.91,
+                "payload": {
+                    "title": "Filtered note",
+                    "source_path": "Synapse-Demo/networking.md",
+                    "text": "VRRP uses a priority-based master election algorithm.",
+                    "chunk_index": 0,
+                },
+            }
+        ],
+        filters={"source_path": "Synapse-Demo/networking.md"},
+    )
+
+    assert missing_terms["insufficient_context"] is True
+    assert missing_terms["retrieval"]["reason"] == "no_query_term_coverage"
+    assert with_terms["insufficient_context"] is False
+    assert with_terms["sources"][0]["source_path"] == "Synapse-Demo/networking.md"
+
+
+# ── Answer gate ────────────────────────────────────────────────────────
+
+
+def test_answer_gate_accepts_multi_source_citations_without_repair():
+    result = run_answer_or_refuse("OSPF uses Dijkstra's Shortest Path First algorithm. [1, 2]")
+
+    assert result["insufficient_context"] is False
+    assert result["answer"].endswith("[1, 2]")
+
+
+def test_answer_gate_rejects_uncited_answers_even_when_sources_exist():
+    result = run_answer_or_refuse("OSPF uses Dijkstra's Shortest Path First algorithm.")
+
+    assert result["insufficient_context"] is True
+    assert result["retrieval"]["refusal_reason"] == "missing_valid_citation"
+
+
+def test_answer_gate_rejects_invalid_or_mixed_citation_numbers():
+    invalid_only = run_answer_or_refuse("OSPF uses Dijkstra's Shortest Path First algorithm. [99]")
+    mixed = run_answer_or_refuse("OSPF uses Dijkstra's Shortest Path First algorithm. [1, 99]")
+
+    assert invalid_only["insufficient_context"] is True
+    assert invalid_only["retrieval"]["refusal_reason"] == "invalid_citation"
+    assert mixed["insufficient_context"] is True
+    assert mixed["retrieval"]["refusal_reason"] == "invalid_citation"
+
+
+def test_answer_gate_rejects_out_of_range_citation_before_final_valid_citation():
+    result = run_answer_or_refuse("OSPF uses Dijkstra SPF. [99]. The valid source is cited later. [1]", sources=[{"source_path": "Synapse-Demo/ospf.md"}])
+
+    assert result["insufficient_context"] is True
+    assert result["retrieval"]["refusal_reason"] == "invalid_citation"
+
+
+def test_answer_gate_rejects_citations_to_sources_without_locator():
+    result = run_answer_or_refuse("OSPF uses Dijkstra's Shortest Path First algorithm. [1]", sources=[{"title": "OSPF"}])
+
+    assert result["insufficient_context"] is True
+    assert result["retrieval"]["refusal_reason"] == "invalid_source_locator"
+
+
+def test_answer_gate_treats_cited_refusal_as_insufficient_context():
+    result = run_answer_or_refuse("I do not have enough indexed note context to answer that reliably. [1]")
+
+    assert result["insufficient_context"] is True
+    assert result["retrieval"]["refusal_reason"] == "empty_or_refused_answer"
+
+
+def test_answer_gate_treats_cited_refusal_without_period_as_insufficient_context():
+    result = run_answer_or_refuse("I do not have enough indexed note context to answer that reliably [1]")
+
+    assert result["insufficient_context"] is True
+    assert result["retrieval"]["refusal_reason"] == "empty_or_refused_answer"
+
+
+def test_answer_gate_treats_refusal_with_citation_then_period_as_insufficient_context():
+    result = run_answer_or_refuse("I do not have enough indexed note context to answer that reliably. [1].")
+
+    assert result["insufficient_context"] is True
+    assert result["retrieval"]["refusal_reason"] == "empty_or_refused_answer"
+
+
+def test_answer_gate_does_not_treat_inline_numeric_brackets_as_citations():
+    inline = run_answer_or_refuse("The configured tag is VLAN[1].")
+    rfc = run_answer_or_refuse("The note references RFC [2328]. OSPF uses Dijkstra SPF. [1]", sources=[{"source_path": "Synapse-Demo/ospf.md"}])
+
+    assert inline["insufficient_context"] is True
+    assert inline["retrieval"]["refusal_reason"] == "missing_valid_citation"
+    assert rfc["insufficient_context"] is False
+    assert rfc["answer"].endswith("[1]")

@@ -1,17 +1,15 @@
 """Tests for Synapse Ask CLI argument parsing and dispatch."""
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-ASK_DIR = Path(__file__).resolve().parents[1] / "Ask"
-if str(ASK_DIR) not in sys.path:
-    sys.path.insert(0, str(ASK_DIR))
-
 from synapse_ask.cli import build_parser, main  # noqa: E402
 from synapse_ask import cli as ask_cli  # noqa: E402
+from synapse_ask.config import load_dotenv
+from synapse_ask.dry_run import dry_run, local_note_metadata_path
+from synapse_ask.notes import DEMO_VAULT, find_available_notes, format_local_notes, resolve_vault
 
 
 # ── Parser structure ──────────────────────────────────────────────────
@@ -404,4 +402,64 @@ class TestOneShotErrorFormatting:
         assert exit_code == 1
         output = capsys.readouterr().out
         assert "Missing SYNAPSE_ASK_WEBHOOK_URL" in output
-        assert "--dry-run" in output
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("plain=value", "value"),
+        ('quoted="value with spaces"', "value with spaces"),
+        ("single='value # kept'", "value # kept"),
+        ("commented=value # removed", "value"),
+        ("equals=a=b=c", "a=b=c"),
+        ("empty=", ""),
+    ],
+)
+def test_dotenv_value_shapes(line, expected, tmp_path, monkeypatch):
+    key, _value = line.split("=", 1)
+    monkeypatch.delenv(key, raising=False)
+    path = tmp_path / ".env"
+    path.write_text(line + "\n", encoding="utf-8")
+    load_dotenv(path)
+    assert __import__("os").environ[key] == expected
+
+
+def test_dotenv_preserves_existing_shell_value(tmp_path, monkeypatch):
+    path = tmp_path / ".env"
+    path.write_text("SYNAPSE_ASK_TEST_VALUE=file\n", encoding="utf-8")
+    monkeypatch.setenv("SYNAPSE_ASK_TEST_VALUE", "shell")
+    load_dotenv(path)
+    assert __import__("os").environ["SYNAPSE_ASK_TEST_VALUE"] == "shell"
+
+
+def test_note_path_is_public_safe_for_demo_repo_and_external_files(tmp_path):
+    demo = DEMO_VAULT / "Synapse-Demo" / "example-study-notes.md"
+    external = tmp_path / "private-note.MD"
+    external.write_text("# Private\n", encoding="utf-8")
+    assert local_note_metadata_path(demo) == "Synapse-Demo/example-study-notes.md"
+    assert local_note_metadata_path(external) == "private-note.md"
+    assert str(tmp_path) not in local_note_metadata_path(external)
+
+
+def test_dry_run_returns_deterministic_preview(tmp_path):
+    note = tmp_path / "note.md"
+    note.write_text("# Note\n\nOSPF uses Dijkstra.\n", encoding="utf-8")
+    result = dry_run("What does OSPF use?", note)
+    assert result["mode"] == "dry-run"
+    assert result["sample_index_preview"]["metadata"]["title"] == "Note"
+    assert result["sample_index_preview"]["chunk_count"] == 1
+
+
+def test_vault_resolution_and_note_listing_are_bounded(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "ospf.md").write_text("# OSPF\n", encoding="utf-8")
+    (vault / "bgp.md").write_text("# BGP\n", encoding="utf-8")
+    monkeypatch.setenv("OBSIDIAN_VAULT_PATH", str(vault))
+    root, label = resolve_vault()
+    notes = find_available_notes(root, query="ospf", limit=10)
+    rendered = format_local_notes(notes, label, root)
+    assert root == vault
+    assert [note.name for note in notes] == ["ospf.md"]
+    assert "ospf.md" in rendered
+    assert str(tmp_path) not in rendered

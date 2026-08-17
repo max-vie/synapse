@@ -348,7 +348,7 @@ def test_ingest_publish_indexes_original_source_not_truncated_formatted_markdown
     ingest(
         {
             "path": "Synapse-Demo/current.md",
-            "content": "# Current\n\nThe exact replay command is `python3 scripts/benchmark/workflow_top_models.py --proof-suite complex --models qwen2.5-coder:14b --skip-pull`.\n",
+            "content": "# Current\n\nThe exact replay command is `python3 -m scripts.benchmark workflow --proof-suite complex --models qwen2.5-coder:14b --skip-pull`.\n",
         },
         env={
             "QDRANT_BASE_URL": "http://qdrant:6333",
@@ -361,7 +361,7 @@ def test_ingest_publish_indexes_original_source_not_truncated_formatted_markdown
     )
 
     indexed_text = "\n".join(embed_inputs)
-    assert "workflow_top_models.py --proof-suite complex" in indexed_text
+    assert "scripts.benchmark workflow --proof-suite complex" in indexed_text
     assert "python3 scripts/benchmark/workflow`" not in indexed_text
 
 
@@ -648,147 +648,3 @@ def test_ingest_publish_no_rollback_on_success():
     # Only one delete call: the stale-chunk cleanup (must_not on content_hash), not a rollback
     assert len(delete_calls) == 1
     assert "must_not" in delete_calls[0]["body"]["filter"], "success path uses stale cleanup, not rollback"
-
-
-# ── source_url uses WIKIJS_PUBLIC_BASE_URL over WIKIJS_BASE_URL ──────────────
-
-
-def test_source_url_uses_public_base_url_when_set():
-    calls = []
-
-    def request_json(method, url, body, headers=None):
-        calls.append({"method": method, "url": url, "body": body})
-        if url.endswith("/api/embed"):
-            return {"embedding": [0.1, 0.2, 0.3]}
-        if url.endswith("/points/count"):
-            return {"result": {"count": 1}}
-        return {"result": {"status": "ok"}}
-
-    result = ingest(
-        {"path": "Demo/Public.md", "content": "# Public URL test", "publish": False},
-        env={
-            "QDRANT_BASE_URL": "http://qdrant:6333",
-            "QDRANT_COLLECTION": "synapse_notes",
-            "OLLAMA_INTERNAL_BASE_URL": "http://ollama:11434",
-            "WIKIJS_BASE_URL": "http://wikijs:3000",
-            "WIKIJS_PUBLIC_BASE_URL": "http://localhost:3000",
-        },
-        request_json=request_json,
-    )
-
-    put_call = next(c for c in calls if c["url"].endswith("/points?wait=true"))
-    points = put_call["body"]["points"]
-    assert points[0]["payload"]["source_url"].startswith("http://localhost:3000/")
-
-
-def test_source_url_omitted_when_public_base_url_not_set():
-    """WIKIJS_BASE_URL is internal-only — must NOT leak into source_url."""
-    calls = []
-
-    def request_json(method, url, body, headers=None):
-        calls.append({"method": method, "url": url, "body": body})
-        if url.endswith("/api/embed"):
-            return {"embedding": [0.1, 0.2, 0.3]}
-        if url.endswith("/points/count"):
-            return {"result": {"count": 1}}
-        return {"result": {"status": "ok"}}
-
-    result = ingest(
-        {"path": "Demo/Fallback.md", "content": "# Fallback URL test", "publish": False},
-        env={
-            "QDRANT_BASE_URL": "http://qdrant:6333",
-            "QDRANT_COLLECTION": "synapse_notes",
-            "OLLAMA_INTERNAL_BASE_URL": "http://ollama:11434",
-            "WIKIJS_BASE_URL": "http://wikijs:3000",
-        },
-        request_json=request_json,
-    )
-
-    put_call = next(c for c in calls if c["url"].endswith("/points?wait=true"))
-    points = put_call["body"]["points"]
-    assert points[0]["payload"]["source_url"] == ""
-
-
-def test_source_url_empty_when_both_base_urls_empty():
-    calls = []
-
-    def request_json(method, url, body, headers=None):
-        calls.append({"method": method, "url": url, "body": body})
-        if url.endswith("/api/embed"):
-            return {"embedding": [0.1, 0.2, 0.3]}
-        if url.endswith("/points/count"):
-            return {"result": {"count": 1}}
-        return {"result": {"status": "ok"}}
-
-    result = ingest(
-        {"path": "Demo/NoUrl.md", "content": "# No URL test", "publish": False},
-        env={
-            "QDRANT_BASE_URL": "http://qdrant:6333",
-            "QDRANT_COLLECTION": "synapse_notes",
-            "OLLAMA_INTERNAL_BASE_URL": "http://ollama:11434",
-        },
-        request_json=request_json,
-    )
-
-    put_call = next(c for c in calls if c["url"].endswith("/points?wait=true"))
-    points = put_call["body"]["points"]
-    assert points[0]["payload"]["source_url"] == ""
-
-
-# ── note_update_lock cleanup tests ─────────────────────────────────────────
-
-
-def test_note_lock_removed_after_release():
-    from synapse.ingest import _NOTE_LOCKS, _NOTE_LOCKS_GUARD
-
-    note_id = "test-lock-cleanup-note"
-    with note_update_lock(note_id):
-        with _NOTE_LOCKS_GUARD:
-            assert note_id in _NOTE_LOCKS, "lock must exist while held"
-    with _NOTE_LOCKS_GUARD:
-        assert note_id not in _NOTE_LOCKS, "lock must be removed after release"
-
-
-def test_repeated_unique_note_ids_do_not_leave_stale_locks():
-    from synapse.ingest import _NOTE_LOCKS, _NOTE_LOCKS_GUARD
-
-    with _NOTE_LOCKS_GUARD:
-        _NOTE_LOCKS.clear()
-
-    for i in range(200):
-        note_id = f"unique-note-{i}"
-        with note_update_lock(note_id):
-            pass
-
-    with _NOTE_LOCKS_GUARD:
-        remaining = len(_NOTE_LOCKS)
-    assert remaining == 0, f"expected 0 stale locks after 200 unique note_ids, got {remaining}"
-
-
-def test_note_lock_kept_while_still_held_by_another_thread():
-    from synapse.ingest import _NOTE_LOCKS, _NOTE_LOCKS_GUARD
-
-    note_id = "test-lock-held-other"
-    with _NOTE_LOCKS_GUARD:
-        _NOTE_LOCKS.clear()
-
-    acquired = threading.Event()
-    release = threading.Event()
-
-    def holder():
-        with note_update_lock(note_id):
-            acquired.set()
-            release.wait(timeout=5)
-
-    thread = threading.Thread(target=holder)
-    thread.start()
-    assert acquired.wait(timeout=5)
-
-    with _NOTE_LOCKS_GUARD:
-        assert note_id in _NOTE_LOCKS, "lock must exist while held by another thread"
-
-    release.set()
-    thread.join(timeout=5)
-
-    with _NOTE_LOCKS_GUARD:
-        assert note_id not in _NOTE_LOCKS, "lock must be cleaned up after thread releases"

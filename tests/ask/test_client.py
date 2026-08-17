@@ -11,15 +11,10 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
-ASK_DIR = Path(__file__).resolve().parents[1] / "Ask"
-if str(ASK_DIR) not in sys.path:
-    sys.path.insert(0, str(ASK_DIR))
 
 from synapse_ask.client import (
     SynapseHTTPError,
@@ -27,6 +22,7 @@ from synapse_ask.client import (
     _sanitize_message,
     ask_question,
     auth_headers,
+    list_indexed_notes,
     post_json,
 )
 from synapse_ask.cli import build_parser
@@ -293,3 +289,42 @@ class TestAuthHeadersSafety:
         monkeypatch.delenv("SYNAPSE_WEBHOOK_AUTH_TOKEN", raising=False)
         headers = auth_headers("")
         assert "X-Synapse-Token" not in headers
+
+
+class FakeResponse:
+    def __init__(self, body: str):
+        self.body = body.encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return self.body
+
+
+def test_successful_requests_send_auth_without_leaking_it(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        return FakeResponse('{"ok": true}')
+
+    monkeypatch.setattr("synapse_ask.client.urllib.request.urlopen", fake_urlopen)
+    assert post_json("http://example.test/webhook", {"question": "hi"}, auth_token="secret-token") == {"ok": True}
+    assert captured["request"].headers["X-synapse-token"] == "secret-token"
+
+
+def test_indexed_notes_uses_notes_route_and_query(monkeypatch):
+    captured = {}
+
+    def fake_post(url, payload, **kwargs):
+        captured.update(url=url, payload=payload)
+        return {"notes": [{"source_path": "ospf.md"}], "count": 1}
+
+    monkeypatch.setattr("synapse_ask.client.post_json", fake_post)
+    result = list_indexed_notes("http://localhost:15515/webhook/synapse/ask", "ospf", 5, "token")
+    assert captured == {"url": "http://localhost:15515/webhook/synapse/notes", "payload": {"query": "ospf"}}
+    assert result == [{"source_path": "ospf.md"}]

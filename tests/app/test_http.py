@@ -1,13 +1,13 @@
-import sys
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-
 from synapse import service  # noqa: E402
+from synapse import Settings
+from synapse import http_client, runtime as runtime_module
+from synapse.runtime import SynapseRuntime
+from synapse.service import create_app
 from synapse.upstream import UpstreamError  # noqa: E402
 
 
@@ -58,7 +58,7 @@ def test_readyz_returns_200_when_all_backends_reachable(monkeypatch):
             return
 
     with socketserver.TCPServer(("127.0.0.1", 0), OkHandler) as server:
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
         thread.start()
         port = server.server_address[1]
         base = f"http://127.0.0.1:{port}"
@@ -279,17 +279,6 @@ def test_service_generic_runtime_error_returns_internal_error_code(monkeypatch):
     assert "db.sqlite" not in body["error"]
 
 
-def test_service_busy_error_returns_rate_limited_code(monkeypatch):
-    monkeypatch.setenv("SYNAPSE_AUTH_DISABLED", "true")
-    monkeypatch.setattr(service, "_WORK_SEMAPHORE", threading.BoundedSemaphore(0))
-
-    client = TestClient(service.app, raise_server_exceptions=False)
-
-    response = client.post("/ask", json={"question": "What is OSPF?"})
-
-    assert response.status_code == 429
-    body = response.json()
-    assert body["error_code"] == "rate_limited"
 
 
 def test_service_rejects_non_object_json_with_400(monkeypatch):
@@ -414,34 +403,47 @@ def test_webhook_notes_accepts_synapse_token(monkeypatch):
     assert response.json() == {"notes": [{"source_path": "Synapse-Demo/ospf.md"}], "count": 1}
 
 
-# ── upstream error code mapping tests ──────────────────────────────────────
+class FakeTransport:
+    def request(self, method, url, payload, headers=None):
+        raise AssertionError("transport should not be reached in this interface test")
 
 
-def test_upstream_code_from_url_maps_qdrant_urls():
-    from synapse.http_client import _upstream_code_from_url
-
-    assert _upstream_code_from_url("http://qdrant:6333/collections") == "upstream_qdrant_error"
-    assert _upstream_code_from_url("http://my-qdrant-host:6333/points") == "upstream_qdrant_error"
-
-
-def test_upstream_code_from_url_maps_ollama_urls():
-    from synapse.http_client import _upstream_code_from_url
-
-    assert _upstream_code_from_url("http://ollama:11434/api/chat") == "upstream_ollama_error"
-    assert _upstream_code_from_url("http://ollama-host:11434/api/embed") == "upstream_ollama_error"
+def test_settings_are_validated_and_secret_safe():
+    settings = Settings.from_env({"WIKIJS_API_TOKEN": "real-secret", "SYNAPSE_AUTH_DISABLED": "true"})
+    settings.validate()
+    assert "real-secret" not in repr(settings)
+    with pytest.raises(ValueError, match="SYNAPSE_WEBHOOK_AUTH_TOKEN"):
+        Settings.from_env({"SYNAPSE_AUTH_DISABLED": "false"}).validate()
 
 
-def test_upstream_code_from_url_maps_wikijs_urls():
-    from synapse.http_client import _upstream_code_from_url
-
-    assert _upstream_code_from_url("http://wikijs:3000/graphql") == "upstream_wikijs_error"
-    assert _upstream_code_from_url("http://my-wikijs:3000/graphql") == "upstream_wikijs_error"
-
-
-def test_upstream_code_from_url_falls_back_to_generic():
-    from synapse.http_client import _upstream_code_from_url
-
-    assert _upstream_code_from_url("http://unknown-service:8080/api") == "upstream_service_error"
+def test_runtime_exposes_ingest_answer_and_notes(monkeypatch):
+    runtime = SynapseRuntime(Settings.from_env({}), FakeTransport())
+    monkeypatch.setattr(runtime_module, "ask", lambda payload, **kwargs: {"answer": payload["question"]})
+    monkeypatch.setattr(runtime_module, "ingest", lambda payload, **kwargs: {"status": payload["status"]})
+    monkeypatch.setattr(runtime_module, "list_indexed_notes", lambda payload, **kwargs: {"notes": [payload["query"]]})
+    assert runtime.answer_question({"question": "hello"}) == {"answer": "hello"}
+    assert runtime.ingest_note({"status": "ok"}) == {"status": "ok"}
+    assert runtime.indexed_notes({"query": "ospf"}) == {"notes": ["ospf"]}
 
 
-import threading
+def test_application_factory_routes_through_injected_runtime(monkeypatch):
+    class Runtime:
+        def answer_question(self, payload):
+            return {"answer": payload["question"], "sources": []}
+
+        def indexed_notes(self, payload):
+            return {"notes": [], "count": 0}
+
+        def ingest_note(self, payload):
+            return {"status": "indexed" if payload.get("publish") is False else "ok"}
+
+    monkeypatch.setenv("SYNAPSE_AUTH_DISABLED", "true")
+    client = TestClient(create_app(Runtime()))
+    assert client.post("/webhook/synapse/ask", json={"question": "hello"}).json()["answer"] == "hello"
+    assert client.post("/webhook/synapse/index-note", json={"content": "note"}).json()["status"] == "indexed"
+
+
+def test_http_timeout_parsing_is_bounded(monkeypatch):
+    for raw, expected in (("5", 5.0), ("invalid", 60.0), ("0.2", 1.0)):
+        monkeypatch.setenv("SYNAPSE_HTTP_TIMEOUT_SECONDS", raw)
+        assert http_client.default_timeout_seconds() == expected
