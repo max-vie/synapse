@@ -28,7 +28,7 @@ Ask auto-loads these values from the project `.env` file when present. Shell env
 
 ```env
 SYNAPSE_ASK_WEBHOOK_URL=http://localhost:15515/webhook/synapse/ask
-SYNAPSE_WEBHOOK_AUTH_TOKEN=<local-webhook-token>
+SYNAPSE_WEBHOOK_AUTH_TOKEN_FILE=secrets/synapse_webhook_auth_token
 ```
 
 ## Usage

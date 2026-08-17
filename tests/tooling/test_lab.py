@@ -38,10 +38,31 @@ def test_env_creation_uses_template_and_private_permissions(tmp_path: Path):
 
     assert envfile.create_from_template(template, destination) is True
     values = envfile.load(destination)
-    assert len(values["SYNAPSE_WEBHOOK_AUTH_TOKEN"]) > 40
-    assert len(values["WIKIJS_DB_PASSWORD"]) > 20
-    assert values["WIKIJS_API_TOKEN"].startswith("replace-")
+    assert len(Path(values["SYNAPSE_WEBHOOK_AUTH_TOKEN_FILE"]).read_text(encoding="utf-8").strip()) > 40
+    assert len(Path(values["WIKIJS_DB_PASSWORD_FILE"]).read_text(encoding="utf-8").strip()) > 20
+    assert Path(values["WIKIJS_API_TOKEN_FILE"]).read_text(encoding="utf-8").strip().startswith("replace-")
     assert destination.stat().st_mode & 0o777 == 0o600
+    secret_dir = Path(values["SYNAPSE_SECRET_DIR"])
+    assert secret_dir.stat().st_mode & 0o777 == 0o700
+    assert all(path.stat().st_mode & 0o777 == 0o640 for path in secret_dir.iterdir())
+    assert values["SYNAPSE_CONTAINER_UID"]
+    assert values["SYNAPSE_CONTAINER_GID"]
+
+
+def test_legacy_inline_secrets_are_migrated_to_files(tmp_path: Path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "SYNAPSE_WEBHOOK_AUTH_TOKEN=legacy-webhook-token\n"
+        "WIKIJS_DB_PASSWORD=legacy-db-password\n"
+        "WIKIJS_API_TOKEN=legacy-wiki-token\n",
+        encoding="utf-8",
+    )
+
+    assert envfile.migrate_legacy_secrets(env_path) is True
+    migrated = envfile.load(env_path)
+    assert migrated["SYNAPSE_WEBHOOK_AUTH_TOKEN"] == ""
+    assert envfile.resolve_secret_values(migrated, env_path=env_path)["WIKIJS_API_TOKEN"] == "legacy-wiki-token"
+    assert "legacy-db-password" not in env_path.read_text(encoding="utf-8")
 
 
 def test_env_creation_does_not_overwrite_without_force(tmp_path: Path):
@@ -167,7 +188,8 @@ def test_ci_compose_uses_relocated_mock_and_installed_application():
     assert "./scripts/proof:/app/scripts/proof:ro,Z" in mock["volumes"]
     assert "working_dir" not in service
     assert "command" not in service
-    assert not service.get("volumes")
+    assert service["user"] == "${SYNAPSE_CONTAINER_UID:-1000}:${SYNAPSE_CONTAINER_GID:-1000}"
+    assert "${SYNAPSE_SECRET_DIR:?set SYNAPSE_SECRET_DIR}:/run/secrets:ro,z" in service["volumes"]
 
 
 def test_mocked_proof_uses_an_isolated_project_and_rebuilds(monkeypatch, tmp_path: Path):

@@ -292,6 +292,17 @@ def test_service_rejects_non_object_json_with_400(monkeypatch):
     assert body["error"] == "request body must be a JSON object"
 
 
+def test_service_rejects_oversized_request_before_json_parsing(monkeypatch):
+    monkeypatch.setenv("SYNAPSE_AUTH_DISABLED", "true")
+    monkeypatch.setenv("SYNAPSE_MAX_REQUEST_BYTES", "32")
+    client = TestClient(service.app)
+
+    response = client.post("/ask", content=b"{" + b"x" * 64 + b"}", headers={"content-type": "application/json"})
+
+    assert response.status_code == 413
+    assert response.json()["error_code"] == "payload_too_large"
+
+
 def test_webhook_auth_fails_closed_when_token_missing(monkeypatch):
     monkeypatch.delenv("SYNAPSE_WEBHOOK_AUTH_TOKEN", raising=False)
     monkeypatch.setenv("SYNAPSE_AUTH_DISABLED", "false")
@@ -413,6 +424,44 @@ def test_settings_are_validated_and_secret_safe():
     assert "real-secret" not in repr(settings)
     with pytest.raises(ValueError, match="SYNAPSE_WEBHOOK_AUTH_TOKEN"):
         Settings.from_env({"SYNAPSE_AUTH_DISABLED": "false"}).validate()
+
+
+def test_settings_resolve_file_backed_secret_and_reject_url_credentials(tmp_path):
+    secret_file = tmp_path / "webhook"
+    secret_file.write_text("file-secret\n", encoding="utf-8")
+    settings = Settings.from_env(
+        {
+            "SYNAPSE_WEBHOOK_AUTH_TOKEN_FILE": str(secret_file),
+            "SYNAPSE_AUTH_DISABLED": "false",
+            "QDRANT_BASE_URL": "http://qdrant:6333",
+        }
+    )
+    settings.validate()
+    assert settings["SYNAPSE_WEBHOOK_AUTH_TOKEN"] == "file-secret"
+    with pytest.raises(ValueError, match="URL credentials"):
+        Settings.from_env(
+            {
+                "SYNAPSE_AUTH_DISABLED": "true",
+                "QDRANT_BASE_URL": "http://user:" + "password" + "@qdrant:6333",
+            }
+        ).validate()
+
+
+def test_webhook_auth_accepts_file_backed_token(monkeypatch, tmp_path):
+    secret_file = tmp_path / "webhook"
+    secret_file.write_text("file-secret\n", encoding="utf-8")
+    monkeypatch.delenv("SYNAPSE_WEBHOOK_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("SYNAPSE_WEBHOOK_AUTH_TOKEN_FILE", str(secret_file))
+    monkeypatch.setenv("SYNAPSE_AUTH_DISABLED", "false")
+    monkeypatch.setattr(service, "ask", lambda payload: {"answer": "ok", "sources": []})
+
+    response = TestClient(service.app).post(
+        "/webhook/synapse/ask",
+        json={"question": "What is OSPF?"},
+        headers={"X-Synapse-Token": "file-secret"},
+    )
+
+    assert response.status_code == 200
 
 
 def test_runtime_exposes_ingest_answer_and_notes(monkeypatch):

@@ -26,7 +26,7 @@ make proof
 
 ## Safety
 
-- `.env` contains local secrets and is created with private permissions.
+- `.env` contains local configuration paths; managed credentials are created below the ignored `SYNAPSE_SECRET_DIR` with private permissions.
 - `.local-artifacts/` contains generated evidence and benchmark output.
 - `python -m scripts.lab remove` deletes containers, named volumes, `.env`, and local artifacts. It requires confirmation, or `--yes` in noninteractive use.
 - Local proof demonstrates the configured lab workflow; it does not establish production readiness.

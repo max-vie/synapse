@@ -27,14 +27,32 @@ def test_local_compose_contract_is_authenticated_private_and_bounded():
     service = compose["services"]["synapse-service"]
     environment = service["environment"]
     assert all(str(mapping).startswith("127.0.0.1:") for item in compose["services"].values() for mapping in item.get("ports", []))
-    assert str(environment["SYNAPSE_WEBHOOK_AUTH_TOKEN"]).startswith("${SYNAPSE_WEBHOOK_AUTH_TOKEN:?")
+    assert environment["SYNAPSE_WEBHOOK_AUTH_TOKEN_FILE"] == "/run/secrets/synapse_webhook_auth_token"
+    assert environment["WIKIJS_API_TOKEN_FILE"] == "/run/secrets/wikijs_api_token"
     assert environment["SYNAPSE_AUTH_DISABLED"] == "${SYNAPSE_AUTH_DISABLED:-false}"
+    assert environment["SYNAPSE_MAX_REQUEST_BYTES"] == "${SYNAPSE_MAX_REQUEST_BYTES:-1048576}"
     assert environment["SYNAPSE_MAX_CONTENT_BYTES"] == "${SYNAPSE_MAX_CONTENT_BYTES:-262144}"
     assert environment["SYNAPSE_MAX_PARALLEL_EXECUTIONS"] == "${SYNAPSE_MAX_PARALLEL_EXECUTIONS:-2}"
     assert environment["SYNAPSE_HTTP_TIMEOUT_SECONDS"] == "${SYNAPSE_HTTP_TIMEOUT_SECONDS:-180}"
     assert "working_dir" not in service
     assert "command" not in service
+    assert service["user"] == "${SYNAPSE_CONTAINER_UID:-1000}:${SYNAPSE_CONTAINER_GID:-1000}"
     assert all("container_name" not in item for item in compose["services"].values())
+    assert "${SYNAPSE_SECRET_DIR:?set SYNAPSE_SECRET_DIR in .env}:/run/secrets:ro,z" in service["volumes"]
+    assert "${SYNAPSE_SECRET_DIR:?set SYNAPSE_SECRET_DIR in .env}:/run/secrets:ro,z" in compose["services"]["wikijs-db"]["volumes"]
+    assert "${SYNAPSE_SECRET_DIR:?set SYNAPSE_SECRET_DIR in .env}:/run/secrets:ro,z" in compose["services"]["wikijs"]["volumes"]
+    assert compose["services"]["wikijs-db"]["environment"]["POSTGRES_PASSWORD_FILE"] == "/run/secrets/wikijs_db_password"
+    assert all("@sha256:" in str(compose["services"][name]["image"]) for name in ("qdrant", "ollama", "wikijs", "wikijs-db"))
+
+
+def test_runtime_image_is_non_root_and_healthchecked():
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "USER synapse" in dockerfile
+    assert "HEALTHCHECK" in dockerfile
+    assert "@sha256:" in dockerfile
+    compose = load_yaml("docker-compose.e2e.yml")
+    assert "healthcheck" in compose["services"]["qdrant"]
+    assert "healthcheck" in compose["services"]["ollama"]
 
 
 def test_reviewed_image_pins_are_current_in_offline_check():
@@ -50,6 +68,10 @@ def test_ci_keeps_monthly_security_scan_and_mocked_proof():
     security_steps = str(workflow["jobs"]["dependency-security"]["steps"])
     assert "scripts/ci/scan-images.sh" in security_steps
     assert "upload-artifact" in security_steps
+    scanner = (ROOT / "scripts/ci/scan-images.sh").read_text(encoding="utf-8")
+    assert "docker save" in scanner
+    assert "Building local Synapse image" in scanner
+    assert "Skipping local-only image" not in scanner
 
 
 def test_example_note_supports_the_reviewer_demo():

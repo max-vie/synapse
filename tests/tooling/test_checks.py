@@ -2,7 +2,18 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from scripts.checks import public as public_hygiene
+from scripts.checks.images import parse_image_ref
 from scripts.checks.private import validate_repo
+
+
+def test_image_reference_requires_valid_optional_digest():
+    assert parse_image_ref("qdrant/qdrant:v1.19.0@sha256:" + "a" * 64) == ("qdrant/qdrant", "v1.19.0", "sha256:" + "a" * 64)
+    try:
+        parse_image_ref("qdrant/qdrant:v1.19.0@sha256:short")
+    except ValueError as error:
+        assert "sha256 digest" in str(error)
+    else:
+        raise AssertionError("invalid image digest should be rejected")
 
 
 def test_candidate_files_skips_deleted_tracked_files(tmp_path: Path, monkeypatch):

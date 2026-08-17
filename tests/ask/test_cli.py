@@ -431,6 +431,19 @@ def test_dotenv_preserves_existing_shell_value(tmp_path, monkeypatch):
     assert __import__("os").environ["SYNAPSE_ASK_TEST_VALUE"] == "shell"
 
 
+def test_dotenv_loads_file_backed_webhook_token(tmp_path, monkeypatch):
+    secret_file = tmp_path / "webhook"
+    secret_file.write_text("file-token\n", encoding="utf-8")
+    path = tmp_path / ".env"
+    path.write_text(f"SYNAPSE_WEBHOOK_AUTH_TOKEN_FILE={secret_file}\n", encoding="utf-8")
+    monkeypatch.delenv("SYNAPSE_WEBHOOK_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("SYNAPSE_WEBHOOK_AUTH_TOKEN_FILE", raising=False)
+
+    load_dotenv(path)
+
+    assert __import__("os").environ["SYNAPSE_WEBHOOK_AUTH_TOKEN"] == "file-token"
+
+
 def test_note_path_is_public_safe_for_demo_repo_and_external_files(tmp_path):
     demo = DEMO_VAULT / "Synapse-Demo" / "example-study-notes.md"
     external = tmp_path / "private-note.MD"

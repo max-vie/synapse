@@ -134,6 +134,7 @@ The Synapse API owns both compatibility webhooks and direct service endpoints:
 
 The webhook is shared-token protected, so Synapse treats resource limits as part of the safety boundary. The service rejects oversized work before formatting or indexing:
 
+- `SYNAPSE_MAX_REQUEST_BYTES`: complete JSON request-body limit, default `1048576` bytes; requests above it receive HTTP 413 before JSON parsing.
 - `SYNAPSE_MAX_CONTENT_BYTES`: maximum note body size, default `262144` bytes.
 - `SYNAPSE_MAX_CHUNKS_PER_NOTE`: maximum chunks generated for one note, default `32`.
 - `SYNAPSE_MAX_QUESTION_LENGTH`: maximum Ask question length, default `1000` characters.
@@ -188,7 +189,7 @@ Chunk payloads include the note metadata plus chunk-specific fields such as `chu
 ## Safety boundaries
 
 - `.env` is private local config and should not be committed or shared.
-- Webhook auth fails closed: live FastAPI webhooks require `SYNAPSE_WEBHOOK_AUTH_TOKEN` and either the `X-Synapse-Token` header or a bearer-token `Authorization` header. The only no-token bypass is explicit `SYNAPSE_AUTH_DISABLED=true` for no-network demo runs.
+- Webhook auth fails closed: live FastAPI webhooks require the file-backed `SYNAPSE_WEBHOOK_AUTH_TOKEN_FILE` (with a temporary legacy inline-variable fallback) and either the `X-Synapse-Token` header or a bearer-token `Authorization` header. The only no-token bypass is explicit `SYNAPSE_AUTH_DISABLED=true` for no-network demo runs.
 - Wiki.js publishing must verify the GraphQL response, not just an HTTP 200 response.
 - Evidence under `.local-artifacts/evidence/` is local proof material and should be reviewed before sharing.
 - `make mocked-fastapi-qdrant-e2e` is a mocked CI plumbing proof. It uses a Compose-internal mock Ollama and no Wiki.js, so it does not prove real model quality, real embedding dimensions, real Wiki.js GraphQL behavior, or realistic retrieval quality.

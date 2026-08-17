@@ -2,7 +2,7 @@
 
 This guide gets you from a fresh clone to a started local Synapse lab, then through the manual Wiki.js token check needed for proof.
 
-Synapse runs only on your machine. Services bind to localhost, secrets stay in `.env`, and lab commands leave existing Docker volumes untouched.
+Synapse runs only on your machine. Services bind to localhost, credentials stay in ignored file-backed secrets, and lab commands leave existing Docker volumes untouched.
 
 ## Before you start
 
@@ -52,7 +52,7 @@ make lab-up
 The lab-up command does five things:
 
 1. checks that the required commands exist;
-2. creates `.env` with generated local secrets if the file is missing;
+2. creates `.env` and a private `secrets/` directory with generated local credentials if the file is missing; existing inline credentials are migrated automatically;
 3. starts the localhost-only Docker lab;
 4. pulls the default local Ollama models: `nomic-embed-text` for embeddings and `tinyllama:latest` for format/answer prompts;
 5. prepares Qdrant and starts the FastAPI Synapse service.
@@ -101,7 +101,7 @@ Steps:
 3. open the Wiki.js Administration Area and enable the API;
 4. create an API token with page create/update/read permission;
 5. open the `.env` file in this repo;
-6. replace the placeholder value for `WIKIJS_API_TOKEN`;
+6. write the Wiki.js token to the path in `WIKIJS_API_TOKEN_FILE` (normally `secrets/wikijs_api_token`);
 7. check the token and live API:
 
 ```bash
@@ -141,7 +141,7 @@ That CI proof uses a Compose-internal mock Ollama and no Wiki.js. It proves Fast
 
 ## Ask questions from the terminal
 
-`Ask/ask.py` talks to the live FastAPI Ask webhook by default. It auto-loads `SYNAPSE_ASK_WEBHOOK_URL` and `SYNAPSE_WEBHOOK_AUTH_TOKEN` from the project `.env` file; if those vars are already exported in your shell, the shell values take priority.
+`Ask/ask.py` talks to the live FastAPI Ask webhook by default. It auto-loads `SYNAPSE_ASK_WEBHOOK_URL` and the file-backed `SYNAPSE_WEBHOOK_AUTH_TOKEN_FILE` from the project `.env` file; if those vars are already exported in your shell, the shell values take priority.
 
 Open the full terminal UI:
 
@@ -236,15 +236,16 @@ make check
 
 `.env.example` is the safe template committed to git.
 
-`.env` is your private local config. `make lab-up` creates it automatically if it does not exist. It contains generated values for:
+`.env` is your private local config. `make lab-up` creates it automatically if it does not exist. Managed credentials are stored in a mode-0700 ignored `SYNAPSE_SECRET_DIR`, with the generated host UID/GID used for the unprivileged container processes, and are mounted read-only into containers. The `.env` file contains paths for:
 
-- `SYNAPSE_WEBHOOK_AUTH_TOKEN`
+- `SYNAPSE_WEBHOOK_AUTH_TOKEN_FILE`
 - `SYNAPSE_AUTH_DISABLED=false`
-- `WIKIJS_DB_PASSWORD`
+- `WIKIJS_DB_PASSWORD_FILE`
+- `WIKIJS_API_TOKEN_FILE`
 
 You usually edit only these values:
 
-- `WIKIJS_API_TOKEN`: add this after Wiki.js admin setup.
+- `WIKIJS_API_TOKEN_FILE`: write this after Wiki.js admin setup; do not put the token directly in `.env`.
 - `OLLAMA_FORMAT_MODEL` and `OLLAMA_ANSWER_MODEL`: `make lab-up` defaults both to `tinyllama:latest` so a low-resource reviewer can pull and run the lab. Larger benchmarked models such as `gemma3:12b` or `gemma3:27b` are optional overrides; expect much larger downloads and roughly 16 GB+ RAM for 12B-class models or 32 GB+ RAM/VRAM for 27B-class models.
 - `OLLAMA_EMBED_MODEL`: embedding model for Qdrant indexing. `make lab-up` probes this model once through Ollama, measures the returned vector length, and manages `QDRANT_COLLECTION` as `synapse_notes__<embedding_model>__<dimension>`.
 - `QDRANT_COLLECTION_BASE`: prefix for managed collection names. Default `synapse_notes`.
@@ -255,6 +256,7 @@ You usually edit only these values:
 - `OLLAMA_CLOUD_MODE`: set `true` to apply the signed-in cloud relay overlay; leave `false` for the normal local lab.
 - `OLLAMA_CLOUD_KEY_FILE` and `OLLAMA_CLOUD_PUBLIC_KEY_FILE`: host paths to the signed-in Ollama key pair used by the cloud overlay. They are mounted read-only and are never copied into the checkout.
 - `SYNAPSE_MAX_CONTENT_BYTES`: maximum note body accepted before formatting/indexing. Default `262144`.
+- `SYNAPSE_MAX_REQUEST_BYTES`: maximum complete JSON request body read by the API. Default `1048576` bytes; larger requests receive HTTP 413 before parsing.
 - `SYNAPSE_MAX_CHUNKS_PER_NOTE`: maximum chunks indexed for one note. Default `32`.
 - `SYNAPSE_MAX_QUESTION_LENGTH`: maximum Ask question length. Default `1000`.
 - `SYNAPSE_MAX_PARALLEL_EXECUTIONS`: concurrent Synapse API work items. Default `2`.
@@ -271,7 +273,7 @@ You usually edit only these values:
 
 Ask responses include cited sources plus a `quoted_support` snippet from the retrieved chunk. With `SYNAPSE_ANSWER_VALIDATION=structural` (default), the citation gate checks valid citation numbers and source locators only; it does not prove the answer is factually correct. Use `quote_overlap` or `extractive` validation modes to refuse answers that lack support from the quoted source text.
 
-Note: `.env` is private. Do not commit it, share it, or paste real token values into docs, issues, benchmark output, screenshots, or chat. Keep `SYNAPSE_AUTH_DISABLED=false` for the live lab; `SYNAPSE_AUTH_DISABLED=true` is only for no-network demo runs.
+Note: `.env` and `secrets/` are private. Do not commit them, share them, or paste real token values into docs, issues, benchmark output, screenshots, or chat. Keep `SYNAPSE_AUTH_DISABLED=false` for the live lab; `SYNAPSE_AUTH_DISABLED=true` is only for no-network demo runs.
 
 ## Reviewer demo
 
@@ -302,11 +304,11 @@ Synapse API or Wiki.js does not open:
 - Run `make lab-logs` if a service exited.
 
 Ask returns unauthorized:
-- Export the same `SYNAPSE_WEBHOOK_AUTH_TOKEN` that is in `.env`.
+- Export the token from `SYNAPSE_WEBHOOK_AUTH_TOKEN_FILE`, or let Ask load that file automatically.
 - Make sure the Synapse API service was restarted after env changes with `make lab-up`.
 
 Wiki.js proof fails:
-- Check that `WIKIJS_API_TOKEN` is set in `.env`.
+- Check that the file referenced by `WIKIJS_API_TOKEN_FILE` contains a usable token.
 - Make sure the token can create and update pages.
 - Run `make lab-up`, then retry `make proof`.
 
@@ -320,7 +322,7 @@ Tests fail because `pytest` is missing:
 ## Safety notes
 
 - Services bind to localhost, not a public interface.
-- `.env` stays private. Do not commit or share it.
+- `.env` and `secrets/` stay private. Do not commit or share them.
 - `.local-artifacts/` stays out of git unless you intentionally sanitize a file first.
 - `make lab-down` stops containers but keeps named Docker volumes.
 - Do not run `docker compose down -v` unless you intentionally want to delete lab data.

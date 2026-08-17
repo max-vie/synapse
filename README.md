@@ -29,7 +29,7 @@ make configure
 make proof
 ```
 
-`make lab-up` starts the FastAPI Synapse service, Qdrant, Ollama, and Wiki.js. It does not mean the proof-ready lab is fully configured. After it starts, open Wiki.js, enable the Wiki.js API in the Administration Area, create a page-capable API token, save it in private `.env`, then run `make configure` to check the token and live API before `make proof`.
+`make lab-up` starts the FastAPI Synapse service, Qdrant, Ollama, and Wiki.js. It does not mean the proof-ready lab is fully configured. After it starts, open Wiki.js, enable the Wiki.js API in the Administration Area, create a page-capable API token, save it in the ignored file referenced by `WIKIJS_API_TOKEN_FILE`, then run `make configure` to check the token and live API before `make proof`.
 
 The reviewer demo is separate and only runs when explicitly called:
 

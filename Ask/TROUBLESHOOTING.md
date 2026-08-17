@@ -17,7 +17,7 @@ curl -i http://localhost:15515/readyz
 Check the Ask environment:
 
 ```bash
-grep -E '^(SYNAPSE_ASK_WEBHOOK_URL|SYNAPSE_WEBHOOK_AUTH_TOKEN)=' .env
+grep -E '^(SYNAPSE_ASK_WEBHOOK_URL|SYNAPSE_WEBHOOK_AUTH_TOKEN_FILE)=' .env
 ```
 
 Run a direct Ask request:
@@ -56,14 +56,14 @@ Cause: the webhook token is missing, wrong, or not loaded from `.env`.
 Fix:
 
 ```bash
-export SYNAPSE_WEBHOOK_AUTH_TOKEN="<value-from-.env>"
+export SYNAPSE_WEBHOOK_AUTH_TOKEN="$(cat secrets/synapse_webhook_auth_token)"
 python3 "Ask/ask.py" --text "What is Synapse?"
 ```
 
 Verify the token exists locally:
 
 ```bash
-grep '^SYNAPSE_WEBHOOK_AUTH_TOKEN=' .env
+grep '^SYNAPSE_WEBHOOK_AUTH_TOKEN_FILE=' .env
 ```
 
 Do not paste real token values into issues, screenshots, or public docs.
