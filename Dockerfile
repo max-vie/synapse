@@ -2,16 +2,13 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# Install runtime dependencies at build time — never pip-install on startup.
-COPY requirements/runtime.txt /app/requirements/runtime.txt
-RUN python -m pip install --no-cache-dir -r /app/requirements/runtime.txt
-
-# Copy application source (mounted :ro at runtime, but also baked in for
-# standalone image use).
+# Install the application and runtime dependencies at build time.
+COPY pyproject.toml README.md LICENSE /app/
 COPY VERSION /app/VERSION
-COPY scripts /app/scripts
+COPY src /app/src
+RUN python -m pip install --no-cache-dir .
 
-WORKDIR /app/scripts
+WORKDIR /app
 
 EXPOSE 8080
 

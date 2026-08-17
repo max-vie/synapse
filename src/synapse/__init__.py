@@ -1,5 +1,8 @@
 """Synapse local helpers."""
 
+from ._version import __version__
+from .runtime import SynapseRuntime
+from .settings import Settings
 from .metadata import (
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
@@ -18,6 +21,9 @@ from .metadata import (
 )
 
 __all__ = [
+    "__version__",
+    "Settings",
+    "SynapseRuntime",
     "DEFAULT_CHUNK_OVERLAP",
     "DEFAULT_CHUNK_SIZE",
     "SCHEMA_VERSION",

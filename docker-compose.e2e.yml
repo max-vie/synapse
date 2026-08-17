@@ -32,7 +32,7 @@ services:
     - qdrant
     - ollama
     - wikijs
-    working_dir: /app/scripts
+    working_dir: /app
     command: python -m synapse.service
     ports:
     - 127.0.0.1:${SYNAPSE_SERVICE_PORT:-15515}:8080
@@ -69,8 +69,6 @@ services:
       SYNAPSE_CONTAINER_BIND: 'true'
       SYNAPSE_WEBHOOK_AUTH_TOKEN: ${SYNAPSE_WEBHOOK_AUTH_TOKEN:?set SYNAPSE_WEBHOOK_AUTH_TOKEN in .env; use SYNAPSE_AUTH_DISABLED=true only for no-network demo workflows}
       SYNAPSE_AUTH_DISABLED: ${SYNAPSE_AUTH_DISABLED:-false}
-    volumes:
-    - ./scripts:/app/scripts:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=5)"]
       interval: 10s

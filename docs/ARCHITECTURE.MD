@@ -46,6 +46,8 @@ flowchart LR
 
 FastAPI is used as the single Synapse service boundary. It keeps webhook auth, request validation, ingest, publishing, indexing, and Ask/RAG behavior in normal Python modules with unit tests instead of splitting the runtime across workflow JSON and custom service code.
 
+Production modules live in `src/synapse/`. Repository operations are separate: `scripts.lab` owns the local Compose lifecycle, `scripts.proof` owns evidence scenarios, and benchmark/capture tooling stays optional.
+
 The service preserves the compatibility webhook paths `/webhook/synapse/note`, `/webhook/synapse/index-note`, `/webhook/synapse/ask`, and `/webhook/synapse/notes`, while also exposing direct `/ingest`, `/ask`, `/notes`, `/healthz`, and `/readyz` endpoints for tests and future clients.
 
 ## Why Markdown notes

@@ -6,7 +6,7 @@ docs
 node_modules
 tests
 *.md
-!requirements/runtime.txt
+!README.md
 .env
 .env.*
 *.pyc

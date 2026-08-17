@@ -14,24 +14,19 @@ import asyncio
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from ._version import __version__
 from .ask import ask, list_indexed_notes
 from .ingest import ingest
+from .runtime import SynapseRuntime
+from .settings import Settings
 from .upstream import UpstreamError
 
-# Single source of truth: the VERSION file at the repo root.
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-try:
-    _SYNAPSE_VERSION = (_REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip()
-except FileNotFoundError:
-    _SYNAPSE_VERSION = "0.1.0-dev"
-
-app = FastAPI(title="Synapse API", version=_SYNAPSE_VERSION)
+app = FastAPI(title="Synapse API", version=__version__)
 
 
 def _max_parallel() -> int:
@@ -247,6 +242,7 @@ async def _require_auth(request: Request) -> JSONResponse | None:
     return None
 
 
+@app.post("/webhook/synapse/ask")
 @app.post("/ask")
 async def ask_endpoint(request: Request) -> JSONResponse:
     auth_err = await _require_auth(request)
@@ -255,6 +251,7 @@ async def ask_endpoint(request: Request) -> JSONResponse:
     return await _handle_ask(request)
 
 
+@app.post("/webhook/synapse/notes")
 @app.post("/notes")
 async def notes_endpoint(request: Request) -> JSONResponse:
     auth_err = await _require_auth(request)
@@ -263,37 +260,13 @@ async def notes_endpoint(request: Request) -> JSONResponse:
     return await _handle_notes(request)
 
 
+@app.post("/webhook/synapse/note")
 @app.post("/ingest")
 async def ingest_endpoint(request: Request) -> JSONResponse:
     auth_err = await _require_auth(request)
     if auth_err:
         return auth_err
     return await _handle_ingest(request)
-
-
-@app.post("/webhook/synapse/ask")
-async def webhook_ask_endpoint(request: Request) -> JSONResponse:
-    auth_err = await _require_auth(request)
-    if auth_err:
-        return auth_err
-    return await _handle_ask(request)
-
-
-@app.post("/webhook/synapse/notes")
-async def webhook_notes_endpoint(request: Request) -> JSONResponse:
-    auth_err = await _require_auth(request)
-    if auth_err:
-        return auth_err
-    return await _handle_notes(request)
-
-
-@app.post("/webhook/synapse/note")
-async def webhook_note_endpoint(request: Request) -> JSONResponse:
-    auth_err = await _require_auth(request)
-    if auth_err:
-        return auth_err
-    return await _handle_ingest(request)
-
 
 @app.post("/webhook/synapse/index-note")
 async def webhook_index_note_endpoint(request: Request) -> JSONResponse:
@@ -309,6 +282,55 @@ async def webhook_index_note_endpoint(request: Request) -> JSONResponse:
     return await _run_endpoint("/webhook/synapse/index-note", lambda: ingest(_with_index_only_flags(body)))
 
 
+def create_app(runtime: SynapseRuntime | None = None) -> FastAPI:
+    """Create an application using an injected runtime at the external seam."""
+    if runtime is None:
+        return app
+
+    application = FastAPI(title="Synapse API", version=__version__)
+
+    async def authenticated(request: Request, operation: str) -> JSONResponse:
+        error = _auth_error(request)
+        if error:
+            return _json_error(401, "unauthorized", error)
+        try:
+            body = await _read_body_json(request)
+        except json.JSONDecodeError as exc:
+            return _json_error(400, "bad_request", f"invalid JSON: {exc.msg}")
+        except ValueError as exc:
+            return _json_error(400, "bad_request", str(exc))
+        handlers = {
+            "ask": runtime.answer_question,
+            "notes": runtime.indexed_notes,
+            "ingest": runtime.ingest_note,
+            "index": lambda payload: runtime.ingest_note(_with_index_only_flags(dict(payload))),
+        }
+        return await _run_endpoint(request.url.path, lambda: handlers[operation](body))
+
+    async def ask_route(request: Request) -> JSONResponse:
+        return await authenticated(request, "ask")
+
+    async def notes_route(request: Request) -> JSONResponse:
+        return await authenticated(request, "notes")
+
+    async def ingest_route(request: Request) -> JSONResponse:
+        return await authenticated(request, "ingest")
+
+    async def index_route(request: Request) -> JSONResponse:
+        return await authenticated(request, "index")
+
+    application.add_api_route("/healthz", healthz, methods=["GET"])
+    application.add_api_route("/readyz", readyz, methods=["GET"])
+    for path in ("/ask", "/webhook/synapse/ask"):
+        application.add_api_route(path, ask_route, methods=["POST"])
+    for path in ("/notes", "/webhook/synapse/notes"):
+        application.add_api_route(path, notes_route, methods=["POST"])
+    for path in ("/ingest", "/webhook/synapse/note"):
+        application.add_api_route(path, ingest_route, methods=["POST"])
+    application.add_api_route("/webhook/synapse/index-note", index_route, methods=["POST"])
+    return application
+
+
 def main() -> int:
     import uvicorn
 
@@ -316,7 +338,9 @@ def main() -> int:
     host = os.environ.get("SYNAPSE_SERVICE_HOST")
     if not host:
         host = ".".join(("0", "0", "0", "0")) if os.environ.get("SYNAPSE_CONTAINER_BIND") == "true" else "127.0.0.1"
-    uvicorn.run(app, host=host, port=port, log_level=os.environ.get("SYNAPSE_UVICORN_LOG_LEVEL", "info"))
+    settings = Settings.from_env()
+    settings.validate()
+    uvicorn.run(create_app(SynapseRuntime.from_env(settings)), host=host, port=port, log_level=os.environ.get("SYNAPSE_UVICORN_LOG_LEVEL", "info"))
     return 0
 
 
