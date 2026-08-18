@@ -73,6 +73,6 @@ flowchart LR
 - [Documentation index](docs/README.md)
 - [Setup](docs/SETUP.md)
 - [Architecture](docs/ARCHITECTURE.MD)
-- [Context glossary](CONTEXT.md)
+- [Context glossary](docs/CONTEXT.md)
 - [Version policy](docs/VERSION_POLICY.md)
 - [Ask](Ask/README.md)

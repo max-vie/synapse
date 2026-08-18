@@ -4,13 +4,13 @@ This guide gets you from a fresh clone to a started local Synapse lab, then thro
 
 Synapse runs only on your machine. Services bind to localhost, credentials stay in ignored file-backed secrets, and lab commands leave existing Docker volumes untouched.
 
-For the project vocabulary and the reasoning behind the main architectural choices, read [the documentation index](README.md) and [the context glossary](../CONTEXT.md).
+For the project vocabulary and the reasoning behind the main architectural choices, read [the documentation index](README.md) and [the context glossary](CONTEXT.md).
 
 ## Before you start
 
-Install the required tools on a Debian-family or RHEL-family Linux system.
+Install Python 3.11 or newer plus `make`, `docker`, and `docker compose` on a Debian-family or RHEL-family Linux system.
 
-1. Install Python 3, `make`, `docker`, and `docker compose`.
+1. Install Python 3.11 or newer, `make`, `docker`, and `docker compose`.
 
    Debian, Ubuntu, or WSL with `apt`:
 
@@ -53,7 +53,7 @@ make lab-up
 
 The lab-up command does five things:
 
-1. checks that the required commands exist;
+1. checks that Docker and Docker Compose are installed and that the daemon is reachable;
 2. creates `.env` and a private `secrets/` directory with generated local credentials if the file is missing; existing inline credentials are migrated automatically;
 3. starts the localhost-only Docker lab;
 4. pulls the default local Ollama models: `nomic-embed-text` for embeddings and `tinyllama:latest` for format/answer prompts;
@@ -71,7 +71,6 @@ make lab-status
 
 Open these in your browser:
 
-- Synapse API: `http://localhost:15515`
 - Wiki.js: `http://localhost:3000`
 - Qdrant: `http://localhost:6333`
 
@@ -248,7 +247,7 @@ make check
 You usually edit only these values:
 
 - `WIKIJS_API_TOKEN_FILE`: write this after Wiki.js admin setup; do not put the token directly in `.env`.
-- `OLLAMA_FORMAT_MODEL` and `OLLAMA_ANSWER_MODEL`: `make lab-up` defaults both to `tinyllama:latest` so a low-resource reviewer can pull and run the lab. Larger benchmarked models such as `gemma3:12b` or `gemma3:27b` are optional overrides; expect much larger downloads and roughly 16 GB+ RAM for 12B-class models or 32 GB+ RAM/VRAM for 27B-class models.
+- `OLLAMA_FORMAT_MODEL` and `OLLAMA_ANSWER_MODEL`: `make lab-up` defaults both to `tinyllama:latest`, the smallest model in the setup, for quick low-resource verification only. It is not the recommended quality model. Use larger benchmarked models such as `gemma3:12b` or `gemma3:27b` for higher-quality runs; expect much larger downloads and roughly 16 GB+ RAM for 12B-class models or 32 GB+ RAM/VRAM for 27B-class models.
 - `OLLAMA_EMBED_MODEL`: embedding model for Qdrant indexing. `make lab-up` probes this model once through Ollama, measures the returned vector length, and manages `QDRANT_COLLECTION` as `synapse_notes__<embedding_model>__<dimension>`.
 - `QDRANT_COLLECTION_BASE`: prefix for managed collection names. Default `synapse_notes`.
 - `SYNAPSE_MANAGE_QDRANT_COLLECTION`: keep `true` for the normal lab so setup can update `QDRANT_COLLECTION` when the embedding model or dimension changes.

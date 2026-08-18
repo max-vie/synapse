@@ -4,7 +4,7 @@ Read the documents in this order:
 
 1. [Setup](SETUP.md) for the safe local workflow and verification commands.
 2. [Architecture](ARCHITECTURE.MD) for the note, retrieval, publishing, and proof flows.
-3. [Context glossary](../CONTEXT.md) for the project vocabulary.
+3. [Context glossary](CONTEXT.md) for the project vocabulary.
 4. [Version policy](VERSION_POLICY.md) for reviewed runtime and image versions.
 5. [Ask client](../Ask/README.md) for terminal usage.
 

@@ -161,27 +161,47 @@ These are local-lab guardrails, not production abuse protection. If the webhook 
 
 ## Answer validation boundary
 
-The live answer gate verifies mechanics: an answer must include valid citation numbers and each cited source must have a locator. It does not prove semantic truth. To make human review easier, each source now includes `quoted_support`, an exact retrieved sentence/snippet used as support for the answer.
+The live answer gate is a source-grounding boundary, not a general fact checker. Before accepting an answer, it rejects empty or refused answers, scans every citation for a valid source number, requires at least one valid citation at the end of the answer, and requires every cited source to expose a locator such as `source_path`, `wiki_path`, `source_url`, or `note_id`. Each source also includes `quoted_support`, a selected excerpt from the retrieved chunk that makes human review possible.
 
 A valid response shape is:
 
 ```json
 {
-  "answer": "OSPF uses Dijkstra's Shortest Path First algorithm. [1]",
+  "question": "What does Ollama provide in the knowledge system?",
+  "answer": "Ollama provides local formatting, embedding, and answer generation. [1]",
+  "insufficient_context": false,
   "sources": [
     {
-      "source_path": "Synapse-Demo/ospf.md",
+      "title": "My Knowledge System",
+      "note_id": null,
+      "source_path": "Synapse-Demo/knowledge-system-notes.md",
+      "wiki_path": null,
+      "source_url": null,
+      "score": 0.91,
       "chunk_index": 0,
-      "quoted_support": "OSPF uses Dijkstra's Shortest Path First algorithm."
+      "quoted_support": "Ollama provides local formatting, embedding, and answer generation."
     }
   ],
   "retrieval": {
+    "accepted": 1,
+    "candidate_accepted": 1,
+    "top_k": 5,
+    "threshold": 0.35,
+    "filtered_for_grounding": true,
+    "query_terms": ["ollama", "provide", "knowledge", "system"],
+    "anchor_terms": ["ollama", "provide", "knowledge", "system"],
+    "matched_terms": ["ollama", "provide", "knowledge", "system"],
+    "term_coverage": 1.0,
+    "required_matches": 3,
+    "anchors_satisfied": true,
     "answer_validation": "quote_overlap"
   }
 }
 ```
 
-The default `quote_overlap` gate checks citation mechanics and overlap with quoted support. `structural` remains available as an explicitly diagnostic mode, while `extractive` requires the answer to appear in quoted support. This lab does not claim overlap proves factual correctness; the deterministic evaluation and real-stack proof report separate contract evidence from model quality.
+Scores, identifiers, paths, and retrieval diagnostics vary with the indexed note and environment; the example shows the complete public result shape for one accepted source.
+
+The default `quote_overlap` mode checks citation mechanics and requires a minimum trigram overlap between the answer and the quoted support. `extractive` requires the answer content to appear verbatim in quoted support. `structural` remains available only as an explicitly diagnostic mode and checks citation mechanics without content grounding. Overlap demonstrates textual support, not that the source itself is factually correct or that the model understood it; the deterministic evaluation and real-stack proof report contract behavior separately from model quality.
 
 ## Metadata model
 

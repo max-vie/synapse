@@ -107,6 +107,7 @@ def test_configure_rejects_graphql_errors(monkeypatch, tmp_path: Path):
 def test_up_owns_the_order_of_lifecycle_steps(monkeypatch, tmp_path: Path):
     lab = Lab(root=tmp_path, env_path=tmp_path / ".env")
     events: list[str] = []
+    monkeypatch.setattr(lab, "_select_compose", lambda: events.append("preflight") or ["docker", "compose"])
     monkeypatch.setattr(lab, "initialize", lambda: events.append("initialize"))
     monkeypatch.setattr(lab, "environment", lambda: {"QDRANT_PORT": "1", "WIKIJS_PORT": "2", "OLLAMA_PORT": "3"})
     monkeypatch.setattr(lab, "compose", lambda *args, **kwargs: events.append("infra"))
@@ -116,7 +117,22 @@ def test_up_owns_the_order_of_lifecycle_steps(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(lab, "start_service", lambda: events.append("service"))
 
     lab.up()
-    assert events == ["initialize", "infra", "Qdrant", "Wiki.js", "Ollama", "models", "collection", "service"]
+    assert events == ["preflight", "initialize", "infra", "Qdrant", "Wiki.js", "Ollama", "models", "collection", "service"]
+
+
+def test_up_checks_docker_before_creating_environment_file(monkeypatch, tmp_path: Path):
+    lab = Lab(root=tmp_path, env_path=tmp_path / ".env")
+
+    def fail_preflight():
+        raise LabError("Docker daemon is not reachable")
+
+    monkeypatch.setattr(lab, "_select_compose", fail_preflight)
+    monkeypatch.setattr(lab, "initialize", lambda: pytest.fail("environment initialization ran before Docker preflight"))
+
+    with pytest.raises(LabError, match="Docker daemon"):
+        lab.up()
+
+    assert not (tmp_path / ".env").exists()
 
 
 def test_cloud_mode_adds_signed_relay_overlay(tmp_path: Path):

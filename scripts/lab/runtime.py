@@ -198,6 +198,9 @@ class Lab:
         self.wait_http("Synapse API", f"http://127.0.0.1:{port}/readyz", attempts=45)
 
     def up(self) -> None:
+        # Verify Docker and Compose before creating local state. A missing
+        # prerequisite should not leave a new .env or secrets directory behind.
+        self._select_compose()
         self.initialize()
         values = self.environment()
         self.compose("--profile", "infra", "up", "-d", "--remove-orphans")

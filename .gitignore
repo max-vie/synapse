@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+AUDIT.md
 *.local
 *.secret
 secrets/
