@@ -159,6 +159,7 @@ def tui_main_region(width: int) -> tuple[int, int]:
 
 
 def draw_startup_card(screen: object, top: int, width: int, mode: str, state: dict[str, object], accent: int, dim: int) -> tuple[int, int, int]:
+    """Draw the reviewer-facing first-impression card and return its geometry."""
     # The top card is the "first impression" screen: logo on the left, practical
     # tips and recent activity on the right. The returned geometry tells the
     # rest of the renderer where the prompt/transcript can start.
@@ -203,6 +204,7 @@ def draw_startup_card(screen: object, top: int, width: int, mode: str, state: di
 
 
 def draw_tui(screen: object, state: dict[str, object], webhook_url: str = "", dry_run_enabled: bool = False) -> None:
+    """Render one complete TUI frame from the current session state."""
     height, width = screen.getmaxyx()
     width = max(70, width)
     height = max(18, height)
@@ -263,4 +265,3 @@ def draw_tui(screen: object, state: dict[str, object], webhook_url: str = "", dr
     except Exception:
         pass
     screen.refresh()
-

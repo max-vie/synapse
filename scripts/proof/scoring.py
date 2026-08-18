@@ -159,6 +159,7 @@ def detect_overclaim(text: str) -> list[str]:
 
 
 def score_sources(answer: str, expected_sources: Iterable[str] | None, required_source_count: int | None = None) -> list[str]:
+    """Check source locators and citation numbers in text or JSON answers."""
     expected = [str(s) for s in expected_sources or []]
     errors: list[str] = []
     parsed_sources: list[Any] | None = None
@@ -178,6 +179,7 @@ def score_sources(answer: str, expected_sources: Iterable[str] | None, required_
             source_locators.append([str(source.get(key) or "") for key in source_locator_keys if source.get(key)])
         else:
             source_locators.append([str(source)])
+    # Phase 1: match expected locators against structured sources when present.
     if parsed_sources is not None:
         found = [src for src in expected if any(src == locator for locators in source_locators for locator in locators)]
     else:
@@ -186,6 +188,7 @@ def score_sources(answer: str, expected_sources: Iterable[str] | None, required_
         required_source_count = len(expected)
     if required_source_count > 0 and len(found) < min(required_source_count, len(expected)):
         errors.append(f"expected at least {required_source_count} source(s), found {len(found)}")
+    # Phase 2: validate citation structure against the matched source positions.
     if required_source_count > 0:
         source_count = len(parsed_sources) if parsed_sources is not None else len(expected)
         expected_indices: set[int] = set()
@@ -207,16 +210,28 @@ def score_sources(answer: str, expected_sources: Iterable[str] | None, required_
         trailing_match = re.search(r"(?:^|\s)\[([0-9,\s]+)\]\s*[.!?]?\s*$", answer_text)
         if not trailing_match and citation_numbers:
             errors.append("expected a trailing source citation")
-        invalid = [number for number in citation_numbers if number < 1 or number > source_count]
-        valid = [number for number in citation_numbers if number in expected_indices]
+        invalid_citations = [
+            number
+            for number in citation_numbers
+            if number < 1 or number > source_count
+        ]
+        valid_citations = [
+            number for number in citation_numbers if number in expected_indices
+        ]
         required_cited = min(required_source_count, len(expected_indices)) if expected_indices else required_source_count
-        if invalid:
-            errors.append(f"invalid source citation(s): {', '.join(str(number) for number in invalid)}")
-        elif len(set(valid)) < required_cited:
+        if invalid_citations:
+            errors.append(
+                "invalid source citation(s): "
+                + ", ".join(str(number) for number in invalid_citations)
+            )
+        elif len(set(valid_citations)) < required_cited:
             if required_cited == 1:
                 errors.append("expected at least one valid inline source citation")
             else:
-                errors.append(f"expected at least {required_cited} cited source(s), found {len(set(valid))}")
+                errors.append(
+                    f"expected at least {required_cited} cited source(s), "
+                    f"found {len(set(valid_citations))}"
+                )
     return errors
 
 
@@ -232,6 +247,7 @@ def score_answer(
     case_sensitive: bool = False,
     require_sources: bool = False,
 ) -> ScoreResult:
+    """Score grounding, refusal, source, and safety expectations independently."""
     required = expectation.get("required_facts", [])
     forbidden = expectation.get("forbidden_facts", [])
     found, missing = detect_required(answer, required, case_sensitive=case_sensitive)

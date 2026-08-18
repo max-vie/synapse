@@ -169,6 +169,12 @@ def prepare_publish_payload(note: Mapping[str, Any], formatted: str) -> dict[str
 
 
 def publish_wikijs(item: Mapping[str, Any], env: Mapping[str, str], request_json: JsonRequester) -> dict[str, Any]:
+    """Create or update the Wiki.js projection for one Note revision.
+
+    Wiki.js path lookup differs across installations, so both accepted path
+    forms are checked before choosing create versus update. HTTP success alone
+    is insufficient: the GraphQL result must also report a successful mutation.
+    """
     base = _base_url(env, "WIKIJS_BASE_URL", "http://wikijs:3000")
     token = _env_get(env, "WIKIJS_API_TOKEN")
     locale = _env_get(env, "WIKIJS_LOCALE", "en")
@@ -176,61 +182,94 @@ def publish_wikijs(item: Mapping[str, Any], env: Mapping[str, str], request_json
         raise ValueError("Missing WIKIJS_API_TOKEN")
 
     def gql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
-        response = request_json(
+        graphql_response = request_json(
             "POST",
             f"{base}/graphql",
             {"query": query, "variables": variables},
             {"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
         )
-        errors = response.get("errors")
+        graphql_errors = graphql_response.get("errors")
         not_found_lookup = (
             "singleByPath" in query
-            and isinstance(errors, list)
-            and errors
+            and isinstance(graphql_errors, list)
+            and graphql_errors
             and all(
                 isinstance(error, Mapping)
                 and str(error.get("message") or "").casefold() == "this page does not exist."
-                for error in errors
+                for error in graphql_errors
             )
         )
-        if isinstance(errors, list) and errors and not not_found_lookup:
-            messages = "; ".join(str(error.get("message") if isinstance(error, Mapping) else error) for error in errors)
+        if isinstance(graphql_errors, list) and graphql_errors and not not_found_lookup:
+            messages = "; ".join(
+                str(error.get("message") if isinstance(error, Mapping) else error)
+                for error in graphql_errors
+            )
             raise UpstreamError("upstream_wikijs_error", f"Wiki.js GraphQL error: {messages}")
-        data = response.get("data")
-        return data if isinstance(data, dict) else {}
+        response_data = graphql_response.get("data")
+        return response_data if isinstance(response_data, dict) else {}
 
-    path = str(item["wiki_path"]).lstrip("/")
+    # Phase 1: resolve the stable page identity before choosing a mutation.
+    wiki_path = str(item["wiki_path"]).lstrip("/")
     lookup_query = "query ($path: String!, $locale: String!) { pages { singleByPath(path: $path, locale: $locale) { id path title } } }"
     # Wiki.js deployments differ on whether lookup accepts a leading slash.
     # Probe both forms before deciding that a stable page needs creation.
-    list_data = gql(lookup_query, {"path": "/" + path, "locale": locale})
-    page_data = list_data.get("pages", {}).get("singleByPath") if isinstance(list_data.get("pages"), Mapping) else None
-    if not page_data:
+    lookup_data = gql(lookup_query, {"path": "/" + wiki_path, "locale": locale})
+    existing_page = (
+        lookup_data.get("pages", {}).get("singleByPath")
+        if isinstance(lookup_data.get("pages"), Mapping)
+        else None
+    )
+    if not existing_page:
         # Wiki.js 2.5 accepts the slash-prefixed form in some deployments but
         # resolves existing pages only when the path has no leading slash in
         # others. Retry the lookup in the canonical stored form before trying
         # to create a page, otherwise an update is misclassified as a duplicate.
-        list_data = gql(lookup_query, {"path": path, "locale": locale})
-        page_data = list_data.get("pages", {}).get("singleByPath") if isinstance(list_data.get("pages"), Mapping) else None
-    existing = page_data if isinstance(page_data, Mapping) and page_data.get("id") else None
-    variables = {"path": path, "title": item["title"], "content": item["formatted_markdown"], "locale": locale}
-    if existing:
-        result = gql(
+        lookup_data = gql(lookup_query, {"path": wiki_path, "locale": locale})
+        existing_page = (
+            lookup_data.get("pages", {}).get("singleByPath")
+            if isinstance(lookup_data.get("pages"), Mapping)
+            else None
+        )
+    existing_page = (
+        existing_page
+        if isinstance(existing_page, Mapping) and existing_page.get("id")
+        else None
+    )
+    page_variables = {
+        "path": wiki_path,
+        "title": item["title"],
+        "content": item["formatted_markdown"],
+        "locale": locale,
+    }
+
+    # Phase 2: update the resolved page or create it once when absent.
+    if existing_page:
+        mutation_data = gql(
             'mutation Update($id:Int!,$path:String!,$title:String!,$content:String!,$locale:String!){ pages { update(id:$id,path:$path,title:$title,content:$content,description:"Synapse note",locale:$locale,isPublished:true,isPrivate:false,editor:"markdown",tags:[]){ responseResult { succeeded errorCode message } page { id path title } } } }',
-            {**variables, "id": int(existing["id"])},
+            {**page_variables, "id": int(existing_page["id"])},
         )
-        response_result = result.get("pages", {}).get("update", {}).get("responseResult", {})
-        if not response_result.get("succeeded"):
-            raise UpstreamError("upstream_wikijs_error", f"Wiki.js update failed: {response_result.get('message') or 'unknown error'}")
+        mutation_result = (
+            mutation_data.get("pages", {}).get("update", {}).get("responseResult", {})
+        )
+        if not mutation_result.get("succeeded"):
+            raise UpstreamError(
+                "upstream_wikijs_error",
+                f"Wiki.js update failed: {mutation_result.get('message') or 'unknown error'}",
+            )
     else:
-        result = gql(
+        mutation_data = gql(
             'mutation Create($path:String!,$title:String!,$content:String!,$locale:String!){ pages { create(path:$path,title:$title,content:$content,description:"Synapse note",locale:$locale,isPublished:true,isPrivate:false,editor:"markdown",tags:[]){ responseResult { succeeded errorCode message } page { id path title } } } }',
-            variables,
+            page_variables,
         )
-        response_result = result.get("pages", {}).get("create", {}).get("responseResult", {})
-        if not response_result.get("succeeded"):
-            raise UpstreamError("upstream_wikijs_error", f"Wiki.js create failed: {response_result.get('message') or 'unknown error'}")
-    return result
+        mutation_result = (
+            mutation_data.get("pages", {}).get("create", {}).get("responseResult", {})
+        )
+        if not mutation_result.get("succeeded"):
+            raise UpstreamError(
+                "upstream_wikijs_error",
+                f"Wiki.js create failed: {mutation_result.get('message') or 'unknown error'}",
+            )
+    return mutation_data
 
 
 def delete_qdrant_chunks(item: Mapping[str, Any], env: Mapping[str, str], request_json: JsonRequester) -> None:
@@ -357,52 +396,72 @@ def rollback_new_qdrant_chunks(item: Mapping[str, Any], env: Mapping[str, str], 
 
 
 def index_qdrant(item: Mapping[str, Any], env: Mapping[str, str], request_json: JsonRequester, *, delete_stale: bool = True) -> int:
-    item = with_revision(item)
+    """Replace one Note revision in Qdrant without exposing partial state.
+
+    Embeddings are prepared first, new points are upserted and counted, and
+    stale points are removed only after Qdrant confirms the complete revision.
+    """
+    revision_record = with_revision(item)
     qdrant = _base_url(env, "QDRANT_BASE_URL", "http://qdrant:6333")
     collection = _env_get(env, "QDRANT_COLLECTION", "synapse_notes")
     ollama = _base_url(env, "OLLAMA_INTERNAL_BASE_URL", "http://ollama:11434")
     embed_model = _env_get(env, "OLLAMA_EMBED_MODEL", "nomic-embed-text")
-    chunks = chunk_text(str(item.get("index_markdown") or item.get("formatted_markdown") or item.get("content") or ""), str(item["note_id"]))
+    note_chunks = chunk_text(
+        str(
+            revision_record.get("index_markdown")
+            or revision_record.get("formatted_markdown")
+            or revision_record.get("content")
+            or ""
+        ),
+        str(revision_record["note_id"]),
+    )
     max_chunks = _int_env(env, "SYNAPSE_MAX_CHUNKS_PER_NOTE", DEFAULT_MAX_CHUNKS_PER_NOTE)
-    if max_chunks > 0 and len(chunks) > max_chunks:
-        raise ValueError(f"too many chunks: {len(chunks)} exceeds max_chunks_per_note={max_chunks}")
-    if not chunks:
+    if max_chunks > 0 and len(note_chunks) > max_chunks:
+        raise ValueError(
+            f"too many chunks: {len(note_chunks)} exceeds max_chunks_per_note={max_chunks}"
+        )
+    if not note_chunks:
         raise ValueError("No Qdrant points generated; preserving existing chunks")
 
+    # Phase 1: finish every embedding batch before changing indexed state.
     batch_size = _int_env(env, "SYNAPSE_EMBED_BATCH_SIZE", DEFAULT_EMBED_BATCH_SIZE)
-    vectors: list[list[Any]] = []
-    for batch in _batched(chunks, batch_size):
+    embedding_vectors: list[list[Any]] = []
+    for batch in _batched(note_chunks, batch_size):
         embed = request_json(
             "POST",
             f"{ollama}/api/embed",
             {"model": embed_model, "input": [chunk.text for chunk in batch]},
             {"Content-Type": "application/json"},
         )
-        vectors.extend(_vectors_from_embed_response(embed, len(batch)))
+        embedding_vectors.extend(_vectors_from_embed_response(embed, len(batch)))
 
-    points = []
-    for chunk, vector in zip(chunks, vectors, strict=True):
-        points.append(
+    # Phase 2: construct the complete public payload for the new revision.
+    qdrant_points = []
+    for chunk, vector in zip(note_chunks, embedding_vectors, strict=True):
+        qdrant_points.append(
             {
                 "id": chunk.chunk_id,
                 "vector": vector,
                 "payload": {
-                    "schema_version": item["schema_version"],
-                    "source": item["source"],
-                    "note_id": item["note_id"],
-                    "content_hash": item["content_hash"],
-                    "current_content_hash": item["current_content_hash"],
-                    "revision": item["revision"],
-                    "updated_at": item["updated_at"],
-                    "ingest_job_id": item["ingest_job_id"],
+                    "schema_version": revision_record["schema_version"],
+                    "source": revision_record["source"],
+                    "note_id": revision_record["note_id"],
+                    "content_hash": revision_record["content_hash"],
+                    "current_content_hash": revision_record["current_content_hash"],
+                    "revision": revision_record["revision"],
+                    "updated_at": revision_record["updated_at"],
+                    "ingest_job_id": revision_record["ingest_job_id"],
                     "chunk_hash": chunk.content_hash,
                     "chunk_index": chunk.chunk_index,
-                    "title": item["title"],
-                    "source_path": item["vault_relative_path"],
-                    "vault_relative_path": item["vault_relative_path"],
-                    "wiki_path": item["wiki_path"],
-                    "path_parts": item.get("path_parts") or [],
-                    "source_url": source_url(_env_get(env, "WIKIJS_PUBLIC_BASE_URL", ""), str(item["wiki_path"])),
+                    "title": revision_record["title"],
+                    "source_path": revision_record["vault_relative_path"],
+                    "vault_relative_path": revision_record["vault_relative_path"],
+                    "wiki_path": revision_record["wiki_path"],
+                    "path_parts": revision_record.get("path_parts") or [],
+                    "source_url": source_url(
+                        _env_get(env, "WIKIJS_PUBLIC_BASE_URL", ""),
+                        str(revision_record["wiki_path"]),
+                    ),
                     "text": chunk.text,
                 },
             }
@@ -410,13 +469,16 @@ def index_qdrant(item: Mapping[str, Any], env: Mapping[str, str], request_json: 
     request_json(
         "PUT",
         f"{qdrant}/collections/{collection}/points?wait=true",
-        {"points": points},
+        {"points": qdrant_points},
         {"Content-Type": "application/json"},
     )
     new_filter = {
         "must": [
-            {"key": "note_id", "match": {"value": item["note_id"]}},
-            {"key": "content_hash", "match": {"value": item["content_hash"]}},
+            {"key": "note_id", "match": {"value": revision_record["note_id"]}},
+            {
+                "key": "content_hash",
+                "match": {"value": revision_record["content_hash"]},
+            },
         ]
     }
     count_response = request_json(
@@ -427,13 +489,19 @@ def index_qdrant(item: Mapping[str, Any], env: Mapping[str, str], request_json: 
     )
     result = count_response.get("result") if isinstance(count_response.get("result"), Mapping) else {}
     indexed_count = result.get("count", count_response.get("count"))
+    # Phase 3: verify the replacement before stale-point cleanup.
     # Never remove the previous revision until Qdrant confirms every new point
     # exists. This is the local replacement transaction's verification step.
-    if indexed_count != len(points):
-        raise UpstreamError("upstream_qdrant_error", f"Qdrant replacement verification failed: expected {len(points)} points for new content_hash, found {indexed_count}")
+    if indexed_count != len(qdrant_points):
+        raise UpstreamError(
+            "upstream_qdrant_error",
+            "Qdrant replacement verification failed: "
+            f"expected {len(qdrant_points)} points for new content_hash, "
+            f"found {indexed_count}",
+        )
     if delete_stale:
-        delete_stale_qdrant_chunks(item, env, request_json)
-    return len(points)
+        delete_stale_qdrant_chunks(revision_record, env, request_json)
+    return len(qdrant_points)
 
 
 def ingest(
@@ -442,26 +510,35 @@ def ingest(
     env: Mapping[str, str] | None = None,
     request_json: JsonRequester | None = None,
 ) -> dict[str, Any]:
+    """Apply the complete local Note lifecycle for one request.
+
+    The function owns ordering across formatting, Qdrant, and Wiki.js so callers
+    see one outcome. Searchable state is removed first on delete, while publish
+    updates stage and verify the new index before changing the readable page.
+    """
     env = env or os.environ
     requester = request_json or default_request_json
+
+    # Phase 1: validate and assign the stable Note identity before any I/O.
     enforce_content_limit(payload, env)
-    note = with_revision(note_from_payload(payload))
+    note_record = with_revision(note_from_payload(payload))
     publish = bool(payload.get("publish", True))
     should_format = bool(payload.get("format", publish))
     delete_requested = bool(payload.get("delete", False))
-    with note_update_lock(str(note["note_id"])):
+    with note_update_lock(str(note_record["note_id"])):
+        # Phase 2a: delete searchable state before the readable projection.
         if delete_requested:
             # Remove searchable state first. If publishing deletion fails, the
             # page remains visible but cannot be returned as grounded evidence.
-            delete_qdrant_chunks(note, env, requester)
+            delete_qdrant_chunks(note_record, env, requester)
             if publish:
-                wiki_result = delete_wikijs(note, env, requester)
+                wiki_result = delete_wikijs(note_record, env, requester)
                 publisher_status = "deleted"
             else:
                 wiki_result = {"status": "skipped"}
                 publisher_status = "skipped"
             return {
-                **note,
+                **note_record,
                 "status": "deleted",
                 "publisher": "wikijs" if publish else None,
                 "publisher_status": publisher_status,
@@ -470,35 +547,43 @@ def ingest(
                 "chunks": 0,
                 "qdrant_collection": _env_get(env, "QDRANT_COLLECTION", "synapse_notes"),
             }
+        # Phase 2b: prepare the exact revision shared by both projections.
         if should_format:
-            formatted = format_markdown(note, env, requester)
+            formatted = format_markdown(note_record, env, requester)
         else:
-            formatted = str(payload.get("formatted_markdown") or note["content"])
-        item = (
-            prepare_publish_payload(note, formatted)
+            formatted = str(payload.get("formatted_markdown") or note_record["content"])
+        revision_record = (
+            prepare_publish_payload(note_record, formatted)
             if publish
-            else with_revision({**note, "formatted_markdown": formatted})
+            else with_revision({**note_record, "formatted_markdown": formatted})
         )
         # Publish order is deliberate: index the original source, publish the
         # readable page, then remove stale vectors after both sides succeeded.
         # Index-only requests use their provided formatted content instead.
-        index_item = (
-            {**item, "index_markdown": note["content"]} if publish else item
+        index_record = (
+            {**revision_record, "index_markdown": note_record["content"]}
+            if publish
+            else revision_record
         )
-        indexed_chunks = index_qdrant(index_item, env, requester, delete_stale=not publish)
+        indexed_chunks = index_qdrant(
+            index_record,
+            env,
+            requester,
+            delete_stale=not publish,
+        )
         if publish:
             try:
-                wiki_result = publish_wikijs(item, env, requester)
+                wiki_result = publish_wikijs(revision_record, env, requester)
             except Exception:  # noqa: BLE001 - rollback must happen regardless of error type.
                 # Wiki.js publish failed: roll back newly inserted Qdrant chunks
                 # so no searchable chunks exist without a corresponding Wiki.js page.
-                rollback_new_qdrant_chunks(item, env, requester)
+                rollback_new_qdrant_chunks(revision_record, env, requester)
                 raise
-            delete_stale_qdrant_chunks(item, env, requester)
+            delete_stale_qdrant_chunks(revision_record, env, requester)
         else:
             wiki_result = None
         return {
-            **item,
+            **revision_record,
             "status": "ok" if publish else "indexed",
             "publisher": "wikijs" if publish else None,
             "publisher_status": "ok" if publish else "skipped",

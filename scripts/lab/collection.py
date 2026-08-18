@@ -163,6 +163,8 @@ def ensure_collection(
     env_file: Path | None = None,
     request_json: RequestJson = default_request_json,
 ) -> dict[str, Any]:
+    """Create or validate the collection required by the configured embedding model."""
+    # Phase 1: derive identity from the model's measured vector dimension.
     model = env.get("OLLAMA_EMBED_MODEL", DEFAULT_EMBED_MODEL)
     dimension = embedding_dimension(env, request_json)
     collection = expected_collection(env, model, dimension)
@@ -174,13 +176,19 @@ def ensure_collection(
         env["QDRANT_COLLECTION"] = collection
 
     try:
-        info = request_json_with_retries(request_json, f"{qdrant}/collections/{collection}", None, None)
+        collection_info = request_json_with_retries(
+            request_json,
+            f"{qdrant}/collections/{collection}",
+            None,
+            None,
+        )
     except RuntimeError as exc:
         if "404" not in str(exc):
             raise
     else:
-        actual_size, actual_distance = vector_config(info)
-        actual_metadata = collection_metadata(info)
+        # Phase 2a: reuse only a collection with a compatible vector contract.
+        actual_size, actual_distance = vector_config(collection_info)
+        actual_metadata = collection_metadata(collection_info)
         if actual_size == dimension and actual_distance == DEFAULT_DISTANCE and actual_metadata.get("embedding_model") == model:
             return {"collection": collection, "embedding_model": model, "embedding_dimension": dimension}
         if actual_size == dimension and actual_distance == DEFAULT_DISTANCE and not actual_metadata.get("embedding_model"):
@@ -194,6 +202,7 @@ def ensure_collection(
             "Use a new QDRANT_COLLECTION name or recreate the collection."
         )
 
+    # Phase 2b: a missing collection is safe to create with the measured schema.
     request_json_with_retries(
         request_json,
         f"{qdrant}/collections/{collection}",

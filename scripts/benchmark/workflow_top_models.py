@@ -167,6 +167,7 @@ def select_top_models(limit: int, max_params: float, explicit_models: list[str] 
 
 
 def parse_evidence(model: str, env: dict[str, str], duration_s: float, ok: bool, output: str, error: str) -> dict[str, Any]:
+    """Convert one Live proof artifact into a redacted benchmark record."""
     evidence_path = EVIDENCE_DIR / "local-e2e-latest.json"
     evidence: dict[str, Any] = {}
     if evidence_path.exists():
@@ -215,6 +216,7 @@ def parse_evidence(model: str, env: dict[str, str], duration_s: float, ok: bool,
 
 
 def run_workflow_for_model(model: str, args: argparse.Namespace, original_env_text: str, original_models: set[str]) -> dict[str, Any]:
+    """Switch one model, run its proof, and restore temporary operator state."""
     env = load_dotenv(ENV_FILE)
     started = time.monotonic()
     pulled_here = (not args.skip_pull) and model not in original_models
@@ -279,6 +281,7 @@ def write_run(models: list[dict[str, Any]], args: argparse.Namespace) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run selected models serially and write one auditable workflow record."""
     global ENV_FILE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=5, help="number of top models to live-test")
@@ -307,19 +310,35 @@ def main(argv: list[str] | None = None) -> int:
         ENV_FILE.write_text(source_env.read_text(encoding="utf-8"), encoding="utf-8")
         original_env_text = ENV_FILE.read_text(encoding="utf-8")
         original_models = compose_model_names()
-        results = []
+        workflow_results = []
         for model in selected:
             print(f"== workflow {model} ==", flush=True)
-            item = run_workflow_for_model(model, args, original_env_text, original_models)
-            results.append(item)
-            print(f"{model}: live workflow score {item['workflow']['score']} pass={item['workflow']['passed']}", flush=True)
+            model_result = run_workflow_for_model(
+                model,
+                args,
+                original_env_text,
+                original_models,
+            )
+            workflow_results.append(model_result)
+            print(
+                f"{model}: live workflow score {model_result['workflow']['score']} "
+                f"pass={model_result['workflow']['passed']}",
+                flush=True,
+            )
     ENV_FILE = source_env
 
-    path = write_run(results, args)
+    path = write_run(workflow_results, args)
     print(f"Wrote {path}")
     rendered = report.render_latest(OUTPUT_DIR, REPORT_PATH)
     print(f"Wrote {rendered}")
-    return 0 if all(item.get("workflow", {}).get("passed") for item in results) else 1
+    return (
+        0
+        if all(
+            model_result.get("workflow", {}).get("passed")
+            for model_result in workflow_results
+        )
+        else 1
+    )
 
 
 if __name__ == "__main__":

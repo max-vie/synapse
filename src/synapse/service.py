@@ -62,6 +62,12 @@ def _run_limited(handler: Callable[[], dict[str, Any]], semaphore: threading.Bou
 
 
 async def _read_body_json(request: Request, env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Read one JSON object while enforcing the byte limit during streaming.
+
+    ``Content-Length`` enables an early rejection but is not trusted as proof of
+    the actual body size. Chunked and incorrectly declared requests are counted
+    again as bytes arrive, before JSON parsing allocates application objects.
+    """
     values = env if env is not None else os.environ
     # Content-Length is only an early rejection. Streaming the body is still
     # required because chunked requests may omit it or declare it incorrectly.
@@ -103,6 +109,7 @@ async def _run_endpoint(
     handler: Callable[[], dict[str, Any]],
     semaphore: threading.BoundedSemaphore | None = None,
 ) -> JSONResponse:
+    """Run blocking application work off-loop and return sanitized JSON errors."""
     try:
         return JSONResponse(status_code=200, content=await asyncio.to_thread(_run_limited, handler, semaphore))
     except BusyError as error:
@@ -243,26 +250,35 @@ def create_app(runtime: SynapseRuntime | None = None, settings: Settings | Mappi
     frozen ``Settings`` value so auth, request limits, readiness, and work
     concurrency do not read ambient process state.
     """
-    existing_app = globals().get("app")
-    if runtime is None and settings is None and isinstance(existing_app, FastAPI):
+    compatibility_app = globals().get("app")
+    if runtime is None and settings is None and isinstance(compatibility_app, FastAPI):
         # Preserve the module-level compatibility app for old local callers;
         # production and tests pass explicit dependencies through this seam.
-        return existing_app
+        return compatibility_app
 
-    fixed_settings = None
+    # Phase 1: freeze configuration when the caller provides an application seam.
+    application_settings = None
     if settings is not None:
-        fixed_settings = settings if isinstance(settings, Settings) else Settings.from_env(settings)
+        application_settings = (
+            settings if isinstance(settings, Settings) else Settings.from_env(settings)
+        )
     elif isinstance(runtime, SynapseRuntime):
-        fixed_settings = runtime.settings
+        application_settings = runtime.settings
 
     def current_settings() -> Settings:
         # Frozen settings make the application deterministic. Only the legacy
         # module-level app resolves env on each request for compatibility.
-        return fixed_settings if fixed_settings is not None else Settings.from_env()
+        return (
+            application_settings
+            if application_settings is not None
+            else Settings.from_env()
+        )
 
-    semaphore = threading.BoundedSemaphore(_max_parallel(fixed_settings))
+    work_semaphore = threading.BoundedSemaphore(_max_parallel(application_settings))
     application = FastAPI(title="Synapse API", version=__version__)
 
+    # Phase 2: translate route operations onto either the injected runtime or
+    # the legacy module functions. The latter remains only for local compatibility.
     def dispatch(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
         if runtime is not None:
             # Injected runtimes keep route code unaware of Ollama, Qdrant, Wiki.js,
@@ -282,20 +298,26 @@ def create_app(runtime: SynapseRuntime | None = None, settings: Settings | Mappi
         }
         return handlers[operation](payload)
 
+    # Phase 3: every data route shares auth, bounded body parsing, concurrency,
+    # and sanitized error handling before it reaches application logic.
     async def authenticated(request: Request, operation: str) -> JSONResponse:
         request_settings = current_settings()
-        error = _auth_error(request, request_settings)
-        if error:
-            return _json_error(401, "unauthorized", error)
+        auth_error = _auth_error(request, request_settings)
+        if auth_error:
+            return _json_error(401, "unauthorized", auth_error)
         try:
-            body = await _read_body_json(request, request_settings)
+            request_payload = await _read_body_json(request, request_settings)
         except RequestTooLargeError as exc:
             return _json_error(413, "payload_too_large", str(exc))
         except json.JSONDecodeError as exc:
             return _json_error(400, "bad_request", f"invalid JSON: {exc.msg}")
         except ValueError as exc:
             return _json_error(400, "bad_request", str(exc))
-        return await _run_endpoint(request.url.path, lambda: dispatch(operation, body), semaphore)
+        return await _run_endpoint(
+            request.url.path,
+            lambda: dispatch(operation, request_payload),
+            work_semaphore,
+        )
 
     async def ask_route(request: Request) -> JSONResponse:
         return await authenticated(request, "ask")
@@ -312,6 +334,7 @@ def create_app(runtime: SynapseRuntime | None = None, settings: Settings | Mappi
     def ready_route() -> JSONResponse:
         return readyz(current_settings())
 
+    # Phase 4: register direct paths and their compatibility webhook aliases.
     application.add_api_route("/healthz", healthz, methods=["GET"])
     application.add_api_route("/readyz", ready_route, methods=["GET"])
     for path in ("/ask", "/webhook/synapse/ask"):

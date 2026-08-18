@@ -258,6 +258,8 @@ def assert_real_stack_config(env: dict[str, str]) -> None:
 
 
 def run_real_local_stack_proof(env: dict[str, str]) -> int:
+    """Run the strongest configured Live proof and persist its full evidence."""
+    # Phase 1: reject mock-shaped configuration before touching persistent state.
     assert_real_stack_config(env)
     urls = service_urls(env)
     webhook_headers = auth_headers(env)
@@ -269,6 +271,7 @@ def run_real_local_stack_proof(env: dict[str, str]) -> int:
     require_health(health)
     ensure_qdrant_collection(urls["qdrant"], env, qdrant_collection)
 
+    # Phase 2: publish every fresh Note, then run the source-grounded checks.
     note_results = [
         post_and_verify_note(
             note,
@@ -291,7 +294,8 @@ def run_real_local_stack_proof(env: dict[str, str]) -> int:
         "notes_posted": len(note_results),
         "indexed_chunks": sum(int(note.get("qdrant_points_for_note") or 0) for note in note_results),
     }
-    raw = {
+    # Phase 3: summarize once, then render JSON and Markdown from the same data.
+    evidence_payload = {
         "verdict": "PASS" if summary["passed"] else "FAIL",
         "suite_id": REAL_LOCAL_STACK_SUITE_ID,
         "run_id": run_id,
@@ -301,8 +305,8 @@ def run_real_local_stack_proof(env: dict[str, str]) -> int:
         "checks": checks,
         "summary": summary,
     }
-    write_evidence(raw, env)
-    report_text = render_real_local_stack_report(raw)
+    write_evidence(evidence_payload, env)
+    report_text = render_real_local_stack_report(evidence_payload)
     (EVIDENCE_DIR / "real-local-stack-proof-report.md").write_text(redact(report_text, env), encoding="utf-8")
     print(redact(report_text, env))
     return 0 if summary["passed"] else 1
@@ -339,6 +343,7 @@ def render_real_local_stack_report(raw: dict[str, Any]) -> str:
 
 
 def write_evidence(raw: dict[str, Any], env: dict[str, str]) -> None:
+    """Write the latest redacted JSON evidence shared by proof consumers."""
     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
     (EVIDENCE_DIR / "local-e2e-latest.json").write_text(redact(json.dumps(raw, indent=2, ensure_ascii=False), env) + "\n", encoding="utf-8")
 
@@ -525,6 +530,8 @@ def rag_scoring_text(rag: dict[str, Any]) -> str:
 
 
 def run_complex_proof(env: dict[str, str]) -> int:
+    """Run the multi-Note Live proof with safety and stale-evidence checks."""
+    # Phase 1: verify dependencies and prepare the suite's collection.
     urls = service_urls(env)
     webhook_headers = auth_headers(env)
     gql_headers = wikijs_headers(env)
@@ -535,6 +542,7 @@ def run_complex_proof(env: dict[str, str]) -> int:
     require_health(health)
     ensure_qdrant_collection(urls["qdrant"], env, qdrant_collection)
 
+    # Phase 2: publish all scenario Notes before evaluating their questions.
     note_results = [
         post_and_verify_note(
             note,
@@ -581,7 +589,8 @@ def run_complex_proof(env: dict[str, str]) -> int:
         "notes_posted": len(note_results),
         "indexed_chunks": indexed_chunks,
     }
-    raw = {
+    # Phase 3: preserve every failed check alongside the aggregate verdict.
+    evidence_payload = {
         "verdict": "PASS" if summary["passed"] else "FAIL",
         "suite_id": COMPLEX_SUITE_ID,
         "run_id": run_id,
@@ -591,8 +600,8 @@ def run_complex_proof(env: dict[str, str]) -> int:
         "checks": checks,
         "summary": summary,
     }
-    write_evidence(raw, env)
-    report_text = render_complex_report(raw)
+    write_evidence(evidence_payload, env)
+    report_text = render_complex_report(evidence_payload)
     (EVIDENCE_DIR / "local-e2e-report.md").write_text(redact(report_text, env), encoding="utf-8")
     print(redact(report_text, env))
     return 0 if summary["passed"] else 1
@@ -621,6 +630,7 @@ def render_complex_report(raw: dict[str, Any]) -> str:
 
 
 def run_live_rag_check(check: dict[str, Any], *, urls: dict[str, str], webhook_headers: dict[str, str]) -> dict[str, Any]:
+    """Run one Live proof question and record failures as evidence data."""
     payload = {"question": check["question"]}
     if check.get("source_path"):
         payload["source_path"] = check["source_path"]
@@ -676,6 +686,7 @@ def render_ospf_report(raw: dict[str, Any]) -> str:
 
 
 def run_ospf_proof(env: dict[str, str]) -> int:
+    """Prove refusal before ingest and a grounded answer after ingest."""
     urls = service_urls(env)
     webhook_headers = auth_headers(env)
     gql_headers = wikijs_headers(env)
@@ -686,12 +697,14 @@ def run_ospf_proof(env: dict[str, str]) -> int:
     require_health(health)
     ensure_qdrant_collection(urls["qdrant"], env, qdrant_collection)
 
+    # Phase 1: the before-Note checks prove Synapse does not answer from absence.
     checks: list[dict[str, Any]] = []
     before_checks = [check for check in suite["checks"] if check.get("phase") == "before_note"]
     after_checks = [check for check in suite["checks"] if check.get("phase") != "before_note"]
     for check in before_checks:
         checks.append(run_live_rag_check(check, urls=urls, webhook_headers=webhook_headers))
 
+    # Phase 2: publish the fresh Note, then run checks that require its facts.
     note_result = post_and_verify_note(
         suite["notes"][0],
         env=env,
@@ -713,7 +726,7 @@ def run_ospf_proof(env: dict[str, str]) -> int:
         "notes_posted": 1,
         "indexed_chunks": int(note_result.get("qdrant_points_for_note") or 0),
     }
-    raw = {
+    evidence_payload = {
         "verdict": "PASS" if summary["passed"] else "FAIL",
         "suite_id": OSPF_SUITE_ID,
         "run_id": run_id,
@@ -725,14 +738,16 @@ def run_ospf_proof(env: dict[str, str]) -> int:
         "checks": checks,
         "summary": summary,
     }
-    write_evidence(raw, env)
-    report_text = render_ospf_report(raw)
+    write_evidence(evidence_payload, env)
+    report_text = render_ospf_report(evidence_payload)
     (EVIDENCE_DIR / "local-e2e-report.md").write_text(redact(report_text, env), encoding="utf-8")
     print(redact(report_text, env))
     return 0 if summary["passed"] else 1
 
 
 def run_ci_proof(env: dict[str, str]) -> int:
+    """Prove FastAPI/Qdrant plumbing with the deterministic mock Ollama adapter."""
+    # Phase 1: create one unique Note so stale CI data cannot satisfy the proof.
     urls = service_urls(env)
     webhook_headers = auth_headers(env)
     qdrant_collection = env.get("QDRANT_COLLECTION", "synapse_ci_e2e")
@@ -745,6 +760,7 @@ def run_ci_proof(env: dict[str, str]) -> int:
         "This mocked test proves workflow import, webhook execution, Qdrant indexing, and source-grounded RAG adapter plumbing with a synthetic Ollama service and without Wiki.js.\n"
     )
 
+    # Phase 2: require the reduced CI dependency set and prepare Qdrant.
     health = {
         "synapse": synapse_readiness(urls["synapse"], webhook_headers=webhook_headers, attempts=30),
         "qdrant": qdrant_readiness(urls["qdrant"], attempts=30),
@@ -753,6 +769,7 @@ def run_ci_proof(env: dict[str, str]) -> int:
     require_health(health)
     ensure_qdrant_collection(urls["qdrant"], env, qdrant_collection)
 
+    # Phase 3: index, inspect Qdrant independently, then query through FastAPI.
     post_response = request_json(
         f"{urls['synapse']}/webhook/synapse/index-note",
         {"path": note_path, "content": note_content},
@@ -783,7 +800,7 @@ def run_ci_proof(env: dict[str, str]) -> int:
     if first_source.get("source_path") != note_path:
         raise SystemExit(f"CI RAG source grounding mismatch: {rag}")
 
-    raw = {
+    evidence_payload = {
         "verdict": "PASS",
         "suite_id": "synapse-mocked-fastapi-qdrant-e2e-v1",
         "run_id": run_id,
@@ -795,14 +812,19 @@ def run_ci_proof(env: dict[str, str]) -> int:
         "qdrant_points_for_note": len(points),
         "rag": rag,
     }
-    write_evidence(raw, env)
-    report = f"""# Synapse Mocked FastAPI/Qdrant E2E Evidence\n\nVerdict: PASS\nSuite: synapse-mocked-fastapi-qdrant-e2e-v1\nRun ID: {run_id}\nFresh note: {note_path}\nIndexed chunks: {post_response.get('chunks')}\nQdrant points: {len(points)}\n\nScope:\n- Uses a Compose-internal mock Ollama service.\n- Does not prove real Ollama model quality, real embedding dimensions, or Wiki.js GraphQL behavior.\n\nRAG:\n- insufficient_context: {rag.get('insufficient_context')}\n- answer: {rag.get('answer')}\n- first source: {first_source.get('source_path')}\n"""
-    (EVIDENCE_DIR / "ci-e2e-report.md").write_text(redact(report, env), encoding="utf-8")
-    print(redact(report, env))
+    write_evidence(evidence_payload, env)
+    report_text = f"""# Synapse Mocked FastAPI/Qdrant E2E Evidence\n\nVerdict: PASS\nSuite: synapse-mocked-fastapi-qdrant-e2e-v1\nRun ID: {run_id}\nFresh note: {note_path}\nIndexed chunks: {post_response.get('chunks')}\nQdrant points: {len(points)}\n\nScope:\n- Uses a Compose-internal mock Ollama service.\n- Does not prove real Ollama model quality, real embedding dimensions, or Wiki.js GraphQL behavior.\n\nRAG:\n- insufficient_context: {rag.get('insufficient_context')}\n- answer: {rag.get('answer')}\n- first source: {first_source.get('source_path')}\n"""
+    (EVIDENCE_DIR / "ci-e2e-report.md").write_text(
+        redact(report_text, env),
+        encoding="utf-8",
+    )
+    print(redact(report_text, env))
     return 0
 
 
 def run_simple_proof(env: dict[str, str]) -> int:
+    """Run the shortest real-stack Note-to-answer Live proof."""
+    # Phase 1: write one unique source Note into the configured vault.
     urls = service_urls(env)
     webhook_headers = auth_headers(env)
     gql_headers = wikijs_headers(env)
@@ -819,11 +841,13 @@ def run_simple_proof(env: dict[str, str]) -> int:
     note_file.parent.mkdir(parents=True, exist_ok=True)
     note_file.write_text(note_content, encoding="utf-8")
 
+    # Phase 2: verify dependencies before publishing the Note.
     qdrant_collection = env.get("QDRANT_COLLECTION", "synapse_notes")
     health = health_snapshot(urls, webhook_headers=webhook_headers, gql_headers=gql_headers)
     require_health(health)
     ensure_qdrant_collection(urls["qdrant"], env, qdrant_collection)
 
+    # Phase 3: publish, then inspect Wiki.js and Qdrant independently.
     count_before = request_json(f"{urls['qdrant']}/collections/{qdrant_collection}/points/count", {"exact": True})
     post_response = request_json(f"{urls['synapse']}/webhook/synapse/note", {"path": note_path, "content": note_content}, webhook_headers)
     if post_response.get("status") != "ok" or post_response.get("publisher") != "wikijs":
@@ -838,6 +862,7 @@ def run_simple_proof(env: dict[str, str]) -> int:
     if not points or unique_phrase not in "\n".join(p.get("payload", {}).get("text", "") for p in points):
         raise SystemExit("Qdrant payload does not contain unique phrase")
 
+    # Phase 4: the Ask result must quote the fresh Note rather than stale data.
     rag = request_json(
         f"{urls['synapse']}/webhook/synapse/ask",
         {"question": f"What is the verification codename for {run_id}?", "source_path": note_path},
@@ -846,7 +871,7 @@ def run_simple_proof(env: dict[str, str]) -> int:
     if rag.get("insufficient_context") or unique_phrase not in json.dumps(rag, ensure_ascii=False):
         raise SystemExit(f"RAG answer did not prove fresh note: {rag}")
 
-    raw = {
+    evidence_payload = {
         "verdict": "PASS",
         "run_id": run_id,
         "note_path": note_path,
@@ -859,14 +884,18 @@ def run_simple_proof(env: dict[str, str]) -> int:
         "wiki_index_consistency": consistency,
         "rag": rag,
     }
-    write_evidence(raw, env)
-    report = f"""# Synapse Local E2E Evidence\n\nVerdict: PASS\nRun ID: {run_id}\nFresh note: {note_path}\nUnique phrase: {unique_phrase}\nWiki path: {post_response['wiki_path']}\nPublisher: {post_response['publisher']}\nIndexed chunks: {post_response['indexed_chunks']}\n\nHealth:\n- Synapse API: {health['synapse']}\n- Wiki.js: {health['wikijs']}\n- Qdrant: {health['qdrant']}\n- Ollama: {health['ollama']}\n\nQdrant:\n- count before: {count_before['result']['count']}\n- count after: {count_after['result']['count']}\n- fresh note points: {len(points)}\n- wiki/index content hash: {consistency['content_hash']}\n\nRAG:\n- insufficient_context: {rag.get('insufficient_context')}\n- answer: {rag.get('answer')}\n- first source: {(rag.get('sources') or [{}])[0].get('source_path')}\n"""
-    (EVIDENCE_DIR / "local-e2e-report.md").write_text(redact(report, env), encoding="utf-8")
-    print(redact(report, env))
+    write_evidence(evidence_payload, env)
+    report_text = f"""# Synapse Local E2E Evidence\n\nVerdict: PASS\nRun ID: {run_id}\nFresh note: {note_path}\nUnique phrase: {unique_phrase}\nWiki path: {post_response['wiki_path']}\nPublisher: {post_response['publisher']}\nIndexed chunks: {post_response['indexed_chunks']}\n\nHealth:\n- Synapse API: {health['synapse']}\n- Wiki.js: {health['wikijs']}\n- Qdrant: {health['qdrant']}\n- Ollama: {health['ollama']}\n\nQdrant:\n- count before: {count_before['result']['count']}\n- count after: {count_after['result']['count']}\n- fresh note points: {len(points)}\n- wiki/index content hash: {consistency['content_hash']}\n\nRAG:\n- insufficient_context: {rag.get('insufficient_context')}\n- answer: {rag.get('answer')}\n- first source: {(rag.get('sources') or [{}])[0].get('source_path')}\n"""
+    (EVIDENCE_DIR / "local-e2e-report.md").write_text(
+        redact(report_text, env),
+        encoding="utf-8",
+    )
+    print(redact(report_text, env))
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Dispatch one named proof suite using the configured private environment."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", choices=("simple", "complex", "ospf", "ci", "real"), default="simple", help="live proof suite to run")
     args = parser.parse_args(argv)

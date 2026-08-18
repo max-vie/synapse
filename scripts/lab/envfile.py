@@ -143,21 +143,26 @@ def resolve_secret_values(values: Mapping[str, str], *, env_path: Path | None = 
 
 
 def create_from_template(template: Path, destination: Path, *, force: bool = False) -> bool:
-    """Create a private environment file; return False when it already exists."""
+    """Create private configuration and file-backed secrets from the template.
+
+    Existing files are preserved unless forced. Secret values never pass through
+    the generated environment text; only their protected file paths do.
+    """
     if destination.exists() and not force:
         return False
-    text = template.read_text(encoding="utf-8")
+    template_text = template.read_text(encoding="utf-8")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    values = load(template)
+    template_values = load(template)
     secret_dir = destination.parent / "secrets"
     secret_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(secret_dir, SECRET_DIR_MODE)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
-    output: list[str] = []
+    output_lines: list[str] = []
     secret_dir_seen = False
     secret_keys_seen: set[str] = set()
     container_uid_seen = False
     container_gid_seen = False
-    for line in text.splitlines():
+    # Phase 1: preserve template order while replacing managed values in place.
+    for line in template_text.splitlines():
         stripped = line.strip()
         if stripped.startswith(f"{SECRET_DIR_KEY}="):
             line = f"{SECRET_DIR_KEY}={secret_dir}"
@@ -171,7 +176,7 @@ def create_from_template(template: Path, destination: Path, *, force: bool = Fal
         for key, filename in SECRET_FILES.items():
             if stripped.startswith(f"{key}="):
                 secret_keys_seen.add(key)
-                value = values.get(key, "")
+                value = template_values.get(key, "")
                 if key == "SYNAPSE_WEBHOOK_AUTH_TOKEN":
                     value = secrets.token_urlsafe(48)
                 elif key == "WIKIJS_DB_PASSWORD":
@@ -183,7 +188,7 @@ def create_from_template(template: Path, destination: Path, *, force: bool = Fal
                 break
             if stripped.startswith(f"{key}_FILE="):
                 secret_keys_seen.add(key)
-                value = values.get(key, "")
+                value = template_values.get(key, "")
                 if key == "SYNAPSE_WEBHOOK_AUTH_TOKEN":
                     value = secrets.token_urlsafe(48)
                 elif key == "WIKIJS_DB_PASSWORD":
@@ -193,13 +198,15 @@ def create_from_template(template: Path, destination: Path, *, force: bool = Fal
                 _atomic_write(secret_dir / filename, f"{value}\n", mode=SECRET_FILE_MODE)
                 line = f"{key}_FILE={secret_dir / filename}"
                 break
-        output.append(line)
+        output_lines.append(line)
+
+    # Phase 2: append required managed values missing from an older template.
     if not secret_dir_seen:
-        output.append(f"{SECRET_DIR_KEY}={secret_dir}")
+        output_lines.append(f"{SECRET_DIR_KEY}={secret_dir}")
     if not container_uid_seen:
-        output.append(f"SYNAPSE_CONTAINER_UID={os.getuid()}")
+        output_lines.append(f"SYNAPSE_CONTAINER_UID={os.getuid()}")
     if not container_gid_seen:
-        output.append(f"SYNAPSE_CONTAINER_GID={os.getgid()}")
+        output_lines.append(f"SYNAPSE_CONTAINER_GID={os.getgid()}")
     for key, filename in SECRET_FILES.items():
         if key in secret_keys_seen:
             continue
@@ -209,8 +216,8 @@ def create_from_template(template: Path, destination: Path, *, force: bool = Fal
         elif key == "WIKIJS_DB_PASSWORD":
             value = secrets.token_urlsafe(24)
         _atomic_write(secret_dir / filename, f"{value}\n", mode=SECRET_FILE_MODE)
-        output.append(f"{key}_FILE={secret_dir / filename}")
-    _atomic_write(destination, "\n".join(output) + "\n")
+        output_lines.append(f"{key}_FILE={secret_dir / filename}")
+    _atomic_write(destination, "\n".join(output_lines) + "\n")
     return True
 
 

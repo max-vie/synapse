@@ -215,14 +215,16 @@ def _answer_matches(case: EvaluationCase, result: AnswerResult) -> bool:
 
 
 def run_evaluation() -> dict[str, Any]:
-    cases = []
-    answer_cases = []
-    refusal_cases = []
-    citation_cases = []
-    injection_cases = []
+    """Run every deterministic case and report each contract dimension separately."""
+    case_results = []
+    grounded_checks = []
+    refusal_checks = []
+    citation_checks = []
+    injection_checks = []
     context_sizes = []
     latencies = []
 
+    # Phase 1: execute each case through the same Source-grounded answer seam.
     for case in evaluation_cases():
         started = time.perf_counter()
         evaluation_env = {
@@ -249,7 +251,7 @@ def run_evaluation() -> dict[str, Any]:
             and result.sources
             and re.search(r"(?:^|\s)\[[0-9,\s]+\]\s*[.!?]?\s*$", result.answer)
         )
-        item = {
+        case_result = {
             "id": case.case_id,
             "kind": case.kind,
             "passed": passed,
@@ -261,37 +263,38 @@ def run_evaluation() -> dict[str, Any]:
             "context_chars": context_size,
             "latency_ms": round(elapsed_ms, 3),
         }
-        cases.append(item)
+        case_results.append(case_result)
         context_sizes.append(context_size)
         latencies.append(elapsed_ms)
         if case.kind in {"grounded", "injection"}:
-            answer_cases.append(passed)
+            grounded_checks.append(passed)
         if case.kind == "refusal":
-            refusal_cases.append(passed)
+            refusal_checks.append(passed)
         if (
             case.kind in {"grounded", "injection", "citation"}
             and not case.expected_refusal_reason
         ):
-            citation_cases.append(citation_valid)
+            citation_checks.append(citation_valid)
         if case.kind == "injection":
-            injection_cases.append(passed)
+            injection_checks.append(passed)
 
+    # Phase 2: preserve separate metrics so one aggregate cannot hide regressions.
     metrics = {
-        "cases": len(cases),
-        "passed": sum(1 for case in cases if case["passed"]),
-        "grounded_accuracy": round(sum(answer_cases) / len(answer_cases), 3)
-        if answer_cases
+        "cases": len(case_results),
+        "passed": sum(1 for case in case_results if case["passed"]),
+        "grounded_accuracy": round(sum(grounded_checks) / len(grounded_checks), 3)
+        if grounded_checks
         else 0.0,
-        "refusal_precision": round(sum(refusal_cases) / len(refusal_cases), 3)
-        if refusal_cases
+        "refusal_precision": round(sum(refusal_checks) / len(refusal_checks), 3)
+        if refusal_checks
         else 0.0,
-        "citation_validity": round(sum(citation_cases) / len(citation_cases), 3)
-        if citation_cases
+        "citation_validity": round(sum(citation_checks) / len(citation_checks), 3)
+        if citation_checks
         else 0.0,
         "prompt_injection_resistance": round(
-            sum(injection_cases) / len(injection_cases), 3
+            sum(injection_checks) / len(injection_checks), 3
         )
-        if injection_cases
+        if injection_checks
         else 0.0,
         "avg_latency_ms": round(sum(latencies) / len(latencies), 3)
         if latencies
@@ -299,13 +302,13 @@ def run_evaluation() -> dict[str, Any]:
         "max_latency_ms": round(max(latencies), 3) if latencies else 0.0,
         "max_context_chars": max(context_sizes) if context_sizes else 0,
     }
-    passed = bool(cases) and metrics["passed"] == metrics["cases"]
+    passed = bool(case_results) and metrics["passed"] == metrics["cases"]
     return {
         "verdict": "PASS" if passed else "FAIL",
         "suite_id": SUITE_ID,
         "mode": "deterministic_contract",
         "metrics": metrics,
-        "cases": cases,
+        "cases": case_results,
     }
 
 

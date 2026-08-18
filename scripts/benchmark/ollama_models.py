@@ -146,6 +146,7 @@ def weighted_workflow_score(scores: dict[str, float]) -> float:
 
 
 def validate_matrix(models: list[dict[str, Any]]) -> list[str]:
+    """Return all matrix errors so an operator can fix the file in one pass."""
     errors: list[str] = []
     required = {"name", "family", "tier", "roles", "source_url", "timeout_seconds"}
     seen: set[str] = set()
@@ -184,6 +185,7 @@ def max_params_value(value: str | None) -> float | None:
 
 
 def select_models(args: argparse.Namespace, *, include_disabled: bool = False) -> list[dict[str, Any]]:
+    """Apply enabled state, explicit names, tier, and size filters predictably."""
     models = load_matrix()
     errors = validate_matrix(models)
     if errors:
@@ -528,6 +530,8 @@ def cmd_rag(args: argparse.Namespace) -> int:
 
 def cmd_suite(args: argparse.Namespace) -> int:
     """Run the fixed smoke+format+extract suite for every selected model."""
+    # Build the workload once so every model receives identical Note and
+    # question coverage; only the model adapter varies between iterations.
     selected = select_models(args)
     prompts = load_prompts()
     question_data = load_questions()
@@ -573,6 +577,7 @@ def cmd_suite(args: argparse.Namespace) -> int:
 
 
 def cmd_full(args: argparse.Namespace) -> int:
+    """Run the standard suite and require explicit consent for live mutation."""
     if not args.no_live_workflow and not args.full_workflow:
         raise SystemExit("Full benchmark avoids Docker service mutation by default. Re-run with --full-workflow to opt in, or --no-live-workflow for the fixed smoke+format+extract suite.")
     exit_code = cmd_suite(args)
@@ -640,6 +645,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Dispatch one benchmark command without changing its recorded arguments."""
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))

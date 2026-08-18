@@ -199,11 +199,20 @@ def is_git_ignored(root: Path, path: Path) -> bool:
 
 
 def scan_text(path: Path, text: str) -> list[Finding]:
+    """Scan one text file while preserving deliberate fixture exemptions."""
     findings: list[Finding] = []
     # Skip PRIVATE_IP, AUTH_SECRET, ENV_SECRET in exempt files
     # (test fixtures deliberately contain these patterns)
-    rel = path.as_posix()
-    skip_secret = any(exempt.endswith(rel.split("/")[-1] if "/" in rel else rel) or exempt == rel for exempt in EXEMPT_SECRET_PATHS)
+    relative_path = path.as_posix()
+    skip_secret = any(
+        exempt.endswith(
+            relative_path.split("/")[-1]
+            if "/" in relative_path
+            else relative_path
+        )
+        or exempt == relative_path
+        for exempt in EXEMPT_SECRET_PATHS
+    )
     regexes = [
         ("PRIVATE_IP", PRIVATE_IP_RE, "hardcoded private IP; use an env var or placeholder"),
         ("AUTH_SECRET", AUTH_SECRET_RE, "hardcoded Authorization token-like value"),

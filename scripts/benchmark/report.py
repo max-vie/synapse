@@ -188,6 +188,7 @@ def _record_live_workflow(rec: dict[str, Any], item: dict[str, Any]) -> None:
 
 
 def summarize_model_records(runs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Merge heterogeneous run files into one latest record per public model."""
     by_model: dict[str, dict[str, Any]] = {}
     # Oldest first so newer runs overwrite older runs for the same workload.
     for run in sorted(runs, key=lambda r: str(r.get("timestamp_utc", ""))):
@@ -212,21 +213,32 @@ def summarize_model_records(runs: list[dict[str, Any]]) -> dict[str, dict[str, A
                 continue
             if kind == "suite" and ((item.get("suite") or {}).get("suite_id") or spec.get("suite_id")) != STANDARD_SUITE_ID:
                 continue
-            rec = by_model.setdefault(name, _empty_record(name))
-            rec["runs"][kind] = {"timestamp": timestamp, "file": run.get("_path"), "suite_id": spec.get("suite_id")}
+            model_record = by_model.setdefault(name, _empty_record(name))
+            model_record["runs"][kind] = {
+                "timestamp": timestamp,
+                "file": run.get("_path"),
+                "suite_id": spec.get("suite_id"),
+            }
             if kind == "smoke":
-                _record_smoke(rec, item)
+                _record_smoke(model_record, item)
             elif kind == "format":
-                _record_format(rec, item)
+                _record_format(model_record, item)
             elif kind == "extract":
-                _record_extract(rec, item)
+                _record_extract(model_record, item)
             elif kind == "suite":
-                rec["suite_id"] = (item.get("suite") or {}).get("suite_id") or spec.get("suite_id")
-                _record_smoke(rec, item)
-                _record_format(rec, item)
-                _record_extract(rec, item)
-                rec["suite_passed"] = bool((item.get("suite") or {}).get("passed"))
-                rec["workflow_score"] = _score_value((item.get("suite") or {}).get("score")) or weighted_workflow_score(rec["scores"])
+                model_record["suite_id"] = (
+                    (item.get("suite") or {}).get("suite_id")
+                    or spec.get("suite_id")
+                )
+                _record_smoke(model_record, item)
+                _record_format(model_record, item)
+                _record_extract(model_record, item)
+                model_record["suite_passed"] = bool(
+                    (item.get("suite") or {}).get("passed")
+                )
+                model_record["workflow_score"] = _score_value(
+                    (item.get("suite") or {}).get("score")
+                ) or weighted_workflow_score(model_record["scores"])
             elif kind == "workflow":
                 workflow_item = item
                 raw_selection = results.get("selection")
@@ -237,17 +249,31 @@ def summarize_model_records(runs: list[dict[str, Any]]) -> dict[str, dict[str, A
                     and not bool((workflow_item.get("workflow") or {}).get("passed"))
                 ):
                     workflow_item = {**workflow_item, "suite_id": "synapse-live-complex-v1"}
-                _record_live_workflow(rec, workflow_item)
+                _record_live_workflow(model_record, workflow_item)
             elif kind == "pull":
                 passed = bool((item.get("pull") or {}).get("ok"))
-                rec["passes"]["pull"] = passed
-                _set_failure(rec, "pull failed", not passed)
-    for rec in by_model.values():
-        if {"smoke", "format", "extract"} <= set(rec["scores"]):
-            rec["workflow_score"] = weighted_workflow_score(rec["scores"])
-        scores = [value for key, value in rec["scores"].items() if key in {"smoke", "format", "extract"}]
-        rec["overall_score"] = round(sum(scores) / len(scores), 2) if scores else 0
-        rec["passed_all_recorded"] = all(rec["passes"].values()) if rec["passes"] else False
+                model_record["passes"]["pull"] = passed
+                _set_failure(model_record, "pull failed", not passed)
+
+    # Derive comparable totals only after the newest workload records are known.
+    for model_record in by_model.values():
+        if {"smoke", "format", "extract"} <= set(model_record["scores"]):
+            model_record["workflow_score"] = weighted_workflow_score(
+                model_record["scores"]
+            )
+        scores = [
+            value
+            for key, value in model_record["scores"].items()
+            if key in {"smoke", "format", "extract"}
+        ]
+        model_record["overall_score"] = (
+            round(sum(scores) / len(scores), 2) if scores else 0
+        )
+        model_record["passed_all_recorded"] = (
+            all(model_record["passes"].values())
+            if model_record["passes"]
+            else False
+        )
     return by_model
 
 
@@ -398,6 +424,7 @@ def _recommendation_rows(records: dict[str, dict[str, Any]]) -> list[tuple[str, 
 
 
 def render_markdown(runs: list[dict[str, Any]]) -> str:
+    """Render reviewer-facing model evidence without overstating comparability."""
     lines: list[str] = []
     generated = datetime.now(timezone.utc).isoformat(timespec="seconds")
     lines.append("# Synapse local model notes")
@@ -414,6 +441,7 @@ def render_markdown(runs: list[dict[str, Any]]) -> str:
         lines.append("No benchmark result JSON files were found.")
         return "\n".join(lines) + "\n"
 
+    # Phase 1: normalize raw runs into comparable and live-proof views.
     scanned_count = len(runs)
     newest_candidates = reportable_runs(runs)
     newest = sorted(newest_candidates, key=lambda r: str(r.get("timestamp_utc", "")), reverse=True)[0] if newest_candidates else None
@@ -424,27 +452,37 @@ def render_markdown(runs: list[dict[str, Any]]) -> str:
     unavailable: list[dict[str, Any]] = []
     live_workflows = sorted(
         [
-            rec
-            for rec in records.values()
-            if _has_public_workflow_record(rec, "live_workflow", comparable_names)
+            model_record
+            for model_record in records.values()
+            if _has_public_workflow_record(
+                model_record,
+                "live_workflow",
+                comparable_names,
+            )
         ],
-        key=lambda r: (
-            bool((r.get("live_workflow") or {}).get("passed")),
-            _score_value((r.get("live_workflow") or {}).get("score")),
-            _score_value(r.get("workflow_score")),
+        key=lambda model_record: (
+            bool((model_record.get("live_workflow") or {}).get("passed")),
+            _score_value((model_record.get("live_workflow") or {}).get("score")),
+            _score_value(model_record.get("workflow_score")),
         ),
         reverse=True,
     )
     complex_workflows = sorted(
         [
-            rec
-            for rec in records.values()
-            if _has_public_workflow_record(rec, "complex_live_workflow", comparable_names)
+            model_record
+            for model_record in records.values()
+            if _has_public_workflow_record(
+                model_record,
+                "complex_live_workflow",
+                comparable_names,
+            )
         ],
-        key=lambda r: (
-            bool((r.get("complex_live_workflow") or {}).get("passed")),
-            _score_value((r.get("complex_live_workflow") or {}).get("score")),
-            _score_value(r.get("workflow_score")),
+        key=lambda model_record: (
+            bool((model_record.get("complex_live_workflow") or {}).get("passed")),
+            _score_value(
+                (model_record.get("complex_live_workflow") or {}).get("score")
+            ),
+            _score_value(model_record.get("workflow_score")),
         ),
         reverse=True,
     )
@@ -452,16 +490,19 @@ def render_markdown(runs: list[dict[str, Any]]) -> str:
     records_by_name = _records_by_model(list(records.values()))
     recommendation_rows = _recommendation_rows(records_by_name)
 
+    # Phase 2: lead with the decision a technical reviewer is looking for.
     lines.append("## Quality pick")
     lines.append("")
-    default_rec = records_by_name.get("gemma3:27b") or (comparable[0] if comparable else None)
-    if default_rec:
+    default_record = records_by_name.get("gemma3:27b") or (
+        comparable[0] if comparable else None
+    )
+    if default_record:
         lines.append(
-            f"For higher-quality benchmarked runs, use {md_code(default_rec['model'])} when the host has enough RAM/VRAM. "
+            f"For higher-quality benchmarked runs, use {md_code(default_record['model'])} when the host has enough RAM/VRAM. "
             f"The generated lab `.env` still defaults to `tinyllama:latest` for low-resource fresh setup. "
-            f"{md_code(default_rec['model'])} was not the fastest model, but it had the cleanest mix of standard-suite score and live proof: "
-            f"`{fmt_score(default_rec.get('workflow_score'))}` in the standard workflow, "
-            f"fresh-note proof `{_workflow_status(default_rec, 'live_workflow')}`, and complex proof `{_workflow_status(default_rec, 'complex_live_workflow')}`."
+            f"{md_code(default_record['model'])} was not the fastest model, but it had the cleanest mix of standard-suite score and live proof: "
+            f"`{fmt_score(default_record.get('workflow_score'))}` in the standard workflow, "
+            f"fresh-note proof `{_workflow_status(default_record, 'live_workflow')}`, and complex proof `{_workflow_status(default_record, 'complex_live_workflow')}`."
         )
     else:
         lines.append("No default can be recommended yet because no model has completed the full standard suite in the available raw output.")
@@ -470,10 +511,10 @@ def render_markdown(runs: list[dict[str, Any]]) -> str:
         lines.append("| Role | Pick | Standard evidence | Live fresh-note proof | Complex proof | Recommendation | Why |")
         lines.append("|------|------|-------------------|-----------------------|---------------|----------------|-----|")
         for role, model, decision, why in recommendation_rows:
-            rec = records_by_name[model]
+            model_record = records_by_name[model]
             lines.append(
-                f"| {md_cell(role)} | {md_code(model)} | {md_cell(_standard_status(rec))} | "
-                f"{md_cell(_workflow_status(rec, 'live_workflow'))} | {md_cell(_workflow_status(rec, 'complex_live_workflow'))} | "
+                f"| {md_cell(role)} | {md_code(model)} | {md_cell(_standard_status(model_record))} | "
+                f"{md_cell(_workflow_status(model_record, 'live_workflow'))} | {md_cell(_workflow_status(model_record, 'complex_live_workflow'))} | "
                 f"{md_cell(decision)} | {md_cell(why)} |"
             )
     else:
@@ -499,6 +540,7 @@ def render_markdown(runs: list[dict[str, Any]]) -> str:
         lines.append(f"- Best comparable workflow score: `{best['model']}` at `{fmt_score(best.get('workflow_score'))}`")
     lines.append("")
 
+    # Phase 3: present Live proof separately from the faster standard suite.
     lines.append("## Fresh-note live proof")
     lines.append("")
     lines.append(
@@ -509,17 +551,27 @@ def render_markdown(runs: list[dict[str, Any]]) -> str:
     if live_workflows:
         lines.append("| Rank | Model | Verdict | Live workflow | Standard workflow | Fresh note | Qdrant | Duration | Notes |")
         lines.append("|------|-------|---------|---------------|-------------------|------------|--------|----------|-------|")
-        for idx, rec in enumerate(live_workflows, start=1):
-            wf = rec.get("live_workflow") or {}
-            verdict = "PASS" if wf.get("passed") else "FAIL"
-            fresh_note = wf.get("fresh_note") or "—"
-            qdrant_points = wf.get("qdrant_points")
-            qdrant = "—" if qdrant_points in (None, "") else str(qdrant_points)
-            duration = f"{_score_value(wf.get('duration_s')):.1f}s" if wf.get("duration_s") is not None else "—"
-            note = "answered run note" if wf.get("passed") else compact_error_note(str(wf.get("error") or ""))
+        for rank, model_record in enumerate(live_workflows, start=1):
+            workflow_result = model_record.get("live_workflow") or {}
+            verdict = "PASS" if workflow_result.get("passed") else "FAIL"
+            fresh_note = workflow_result.get("fresh_note") or "—"
+            qdrant_points = workflow_result.get("qdrant_points")
+            qdrant_label = (
+                "—" if qdrant_points in (None, "") else str(qdrant_points)
+            )
+            duration_label = (
+                f"{_score_value(workflow_result.get('duration_s')):.1f}s"
+                if workflow_result.get("duration_s") is not None
+                else "—"
+            )
+            note_summary = (
+                "answered run note"
+                if workflow_result.get("passed")
+                else compact_error_note(str(workflow_result.get("error") or ""))
+            )
             lines.append(
-                f"| {idx} | {md_code(rec['model'])} | {md_cell(verdict)} | {fmt_score(wf.get('score'))} | "
-                f"{fmt_score(rec.get('workflow_score'))} | {md_code(fresh_note)} | {md_cell(qdrant)} | {md_cell(duration)} | {md_cell(note)} |"
+                f"| {rank} | {md_code(model_record['model'])} | {md_cell(verdict)} | {fmt_score(workflow_result.get('score'))} | "
+                f"{fmt_score(model_record.get('workflow_score'))} | {md_code(fresh_note)} | {md_cell(qdrant_label)} | {md_cell(duration_label)} | {md_cell(note_summary)} |"
             )
     else:
         lines.append("No live workflow proofs have been recorded yet. Run `python3 -m scripts.benchmark workflow` after selecting models.")
@@ -535,20 +587,28 @@ def render_markdown(runs: list[dict[str, Any]]) -> str:
     if complex_workflows:
         lines.append("| Rank | Model | Verdict | Complex workflow | Standard workflow | Suite | Checks | Notes posted | Indexed chunks | Duration | Failed checks |")
         lines.append("|------|-------|---------|------------------|-------------------|-------|--------|--------------|----------------|----------|---------------|")
-        for idx, rec in enumerate(complex_workflows, start=1):
-            wf = rec.get("complex_live_workflow") or {}
-            verdict = "PASS" if wf.get("passed") else "FAIL"
-            checks_total = wf.get("checks_total")
-            checks = "—" if checks_total in (None, "") else f"{wf.get('checks_passed', 0)}/{checks_total}"
-            notes_posted_value = wf.get("notes_posted")
+        for rank, model_record in enumerate(complex_workflows, start=1):
+            workflow_result = model_record.get("complex_live_workflow") or {}
+            verdict = "PASS" if workflow_result.get("passed") else "FAIL"
+            checks_total = workflow_result.get("checks_total")
+            checks = (
+                "—"
+                if checks_total in (None, "")
+                else f"{workflow_result.get('checks_passed', 0)}/{checks_total}"
+            )
+            notes_posted_value = workflow_result.get("notes_posted")
             notes_posted = "—" if notes_posted_value in (None, "") else str(notes_posted_value)
-            indexed_chunks_value = wf.get("indexed_chunks")
+            indexed_chunks_value = workflow_result.get("indexed_chunks")
             indexed_chunks = "—" if indexed_chunks_value in (None, "") else str(indexed_chunks_value)
-            duration = f"{_score_value(wf.get('duration_s')):.1f}s" if wf.get("duration_s") is not None else "—"
-            failed = ", ".join(wf.get("failed_check_ids") or []) or "—"
+            duration = (
+                f"{_score_value(workflow_result.get('duration_s')):.1f}s"
+                if workflow_result.get("duration_s") is not None
+                else "—"
+            )
+            failed = ", ".join(workflow_result.get("failed_check_ids") or []) or "—"
             lines.append(
-                f"| {idx} | {md_code(rec['model'])} | {md_cell(verdict)} | {fmt_score(wf.get('score'))} | "
-                f"{fmt_score(rec.get('workflow_score'))} | {md_code(wf.get('suite_id') or 'synapse-live-complex-v1')} | {md_cell(checks)} | "
+                f"| {rank} | {md_code(model_record['model'])} | {md_cell(verdict)} | {fmt_score(workflow_result.get('score'))} | "
+                f"{fmt_score(model_record.get('workflow_score'))} | {md_code(workflow_result.get('suite_id') or 'synapse-live-complex-v1')} | {md_cell(checks)} | "
                 f"{md_cell(notes_posted)} | {md_cell(indexed_chunks)} | {md_cell(duration)} | {md_cell(failed)} |"
             )
     else:
@@ -564,11 +624,15 @@ def render_markdown(runs: list[dict[str, Any]]) -> str:
     if comparable:
         lines.append("| Rank | Model | Size | Workflow | Smoke | Format | Extract | Checks | Takeaway |")
         lines.append("|------|-------|------|----------|-------|--------|---------|--------|----------|")
-        for idx, rec in enumerate(comparable, start=1):
-            checks = f"format {rec.get('format_notes', 0)}/2; extract {rec.get('extract_scored_passed', 0)}/{rec.get('extract_questions', 0)} scored"
+        for rank, model_record in enumerate(comparable, start=1):
+            checks = (
+                f"format {model_record.get('format_notes', 0)}/2; "
+                f"extract {model_record.get('extract_scored_passed', 0)}/"
+                f"{model_record.get('extract_questions', 0)} scored"
+            )
             lines.append(
-                f"| {idx} | {md_code(rec['model'])} | {md_cell(rec['size'])} | {fmt_score(rec.get('workflow_score'))} | "
-                f"{fmt_score(rec['scores'].get('smoke'))} | {fmt_score(rec['scores'].get('format'))} | {fmt_score(rec['scores'].get('extract'))} | {md_cell(checks)} | {md_cell(takeaway(rec['model']))} |"
+                f"| {rank} | {md_code(model_record['model'])} | {md_cell(model_record['size'])} | {fmt_score(model_record.get('workflow_score'))} | "
+                f"{fmt_score(model_record['scores'].get('smoke'))} | {fmt_score(model_record['scores'].get('format'))} | {fmt_score(model_record['scores'].get('extract'))} | {md_cell(checks)} | {md_cell(takeaway(model_record['model']))} |"
             )
     else:
         lines.append("No comparable standard workflow runs found.")
@@ -581,20 +645,31 @@ def render_markdown(runs: list[dict[str, Any]]) -> str:
         lines.append("")
         lines.append("| Model | Extract | Questions | Missing for ranking | Takeaway |")
         lines.append("|-------|---------|-----------|---------------------|----------|")
-        for rec in legacy_extract:
-            missing = [name for name in ("smoke", "format", "extract") if name not in rec.get("scores", {})]
-            if rec.get("format_notes", 0) < STANDARD_FORMAT_NOTE_COUNT:
+        for model_record in legacy_extract:
+            missing = [
+                name
+                for name in ("smoke", "format", "extract")
+                if name not in model_record.get("scores", {})
+            ]
+            if model_record.get("format_notes", 0) < STANDARD_FORMAT_NOTE_COUNT:
                 missing.append("standard format coverage")
-            if tuple(rec.get("format_note_paths", [])) and tuple(rec.get("format_note_paths", [])) != STANDARD_FORMAT_NOTE_PATHS:
+            if tuple(model_record.get("format_note_paths", [])) and tuple(
+                model_record.get("format_note_paths", [])
+            ) != STANDARD_FORMAT_NOTE_PATHS:
                 missing.append("standard format note set")
-            if rec.get("extract_questions", 0) < STANDARD_EXTRACT_QUESTION_COUNT:
+            if model_record.get("extract_questions", 0) < STANDARD_EXTRACT_QUESTION_COUNT:
                 missing.append("standard extract coverage")
-            if tuple(rec.get("extract_question_ids", [])) and tuple(rec.get("extract_question_ids", [])) != STANDARD_EXTRACT_QUESTION_IDS:
+            if tuple(model_record.get("extract_question_ids", [])) and tuple(
+                model_record.get("extract_question_ids", [])
+            ) != STANDARD_EXTRACT_QUESTION_IDS:
                 missing.append("standard question set")
-            q = f"{rec.get('extract_scored_passed', 0)}/{rec.get('extract_questions', 0)} scored"
+            question_coverage = (
+                f"{model_record.get('extract_scored_passed', 0)}/"
+                f"{model_record.get('extract_questions', 0)} scored"
+            )
             lines.append(
-                f"| {md_code(rec['model'])} | {fmt_score(rec['scores'].get('extract'))} | {md_cell(q)} | "
-                f"{md_cell(', '.join(missing) or 'unknown')} | {md_cell(takeaway(rec['model']))} |"
+                f"| {md_code(model_record['model'])} | {fmt_score(model_record['scores'].get('extract'))} | {md_cell(question_coverage)} | "
+                f"{md_cell(', '.join(missing) or 'unknown')} | {md_cell(takeaway(model_record['model']))} |"
             )
         lines.append("")
 
@@ -603,8 +678,8 @@ def render_markdown(runs: list[dict[str, Any]]) -> str:
         lines.append("")
         lines.append("These tags were attempted but returned empty responses or were not available at test time.")
         lines.append("")
-        for rec in unavailable:
-            lines.append(f"- {md_code(rec['model'])}")
+        for model_record in unavailable:
+            lines.append(f"- {md_code(model_record['model'])}")
         lines.append("")
 
     if newest:

@@ -142,7 +142,7 @@ class SourceGroundedValidator:
     ) -> AnswerResult:
         # Keep the mature policy implementation as the single authority while
         # translating its legacy mapping result back into the typed contract.
-        raw = answer_or_refuse(
+        validated_payload = answer_or_refuse(
             {
                 "question": question.text,
                 "insufficient_context": insufficient_context,
@@ -153,15 +153,15 @@ class SourceGroundedValidator:
             env=self.env,
         )
         return AnswerResult(
-            question=str(raw.get("question") or question.text),
-            answer=str(raw.get("answer") or ""),
-            insufficient_context=bool(raw.get("insufficient_context")),
+            question=str(validated_payload.get("question") or question.text),
+            answer=str(validated_payload.get("answer") or ""),
+            insufficient_context=bool(validated_payload.get("insufficient_context")),
             sources=tuple(
                 Source.from_mapping(source)
-                for source in raw.get("sources") or []
+                for source in validated_payload.get("sources") or []
                 if isinstance(source, Mapping)
             ),
-            retrieval=dict(raw.get("retrieval") or {}),
+            retrieval=dict(validated_payload.get("retrieval") or {}),
         )
 
 
@@ -175,15 +175,19 @@ def answer_question(
 ) -> AnswerResult:
     """Run retrieval, grounding, generation, and validation through one seam."""
     resolved_env = env if env is not None else os.environ
-    points = [chunk.to_point() for chunk in retriever.retrieve(question)]
-    context = build_context(question.to_mapping(), points, resolved_env)
+    retrieved_points = [chunk.to_point() for chunk in retriever.retrieve(question)]
+    grounded_context = build_context(question.to_mapping(), retrieved_points, resolved_env)
     sources = tuple(
         Source.from_mapping(source)
-        for source in context.get("sources") or []
+        for source in grounded_context.get("sources") or []
         if isinstance(source, Mapping)
     )
-    retrieval = context.get("retrieval") if isinstance(context.get("retrieval"), Mapping) else {}
-    if context.get("insufficient_context"):
+    retrieval = (
+        grounded_context.get("retrieval")
+        if isinstance(grounded_context.get("retrieval"), Mapping)
+        else {}
+    )
+    if grounded_context.get("insufficient_context"):
         # Do not ask the generator to fill a missing-context result. That would
         # turn a retrieval miss into an apparently grounded hallucination.
         return validator.validate(
@@ -193,7 +197,11 @@ def answer_question(
             retrieval,
             insufficient_context=True,
         )
-    draft = generator.generate(question, str(context.get("context") or ""), sources)
+    draft = generator.generate(
+        question,
+        str(grounded_context.get("context") or ""),
+        sources,
+    )
     return validator.validate(question, draft, sources, retrieval)
 
 
@@ -406,6 +414,12 @@ def _point_matches_marker_scope(point: Mapping[str, Any], markers: list[str]) ->
 
 
 def _quoted_support(text: Any, question: str, env: Mapping[str, str]) -> str:
+    """Select the most reviewable source text for a retrieved chunk.
+
+    Exact commands stay intact; ordinary prose is reduced to the sentence with
+    the strongest query-term coverage. The result is evidence for a reviewer,
+    not a generated summary.
+    """
     raw_text = str(text or "")
     if re.search(r"\b(command|replay|exact)\b", question, flags=re.I):
         # Commands are fragile evidence: prefer the complete code-marked line
@@ -428,10 +442,10 @@ def _quoted_support(text: Any, question: str, env: Mapping[str, str]) -> str:
     ]
     if not sentences:
         return source_text[:360]
-    groups = _term_groups(question, env)
+    term_groups = _term_groups(question, env)
     anchor_labels = {
         group["label"]
-        for group in groups
+        for group in term_groups
         if re.match(r"^[a-z0-9._/@#:-]{2,}$", group["label"])
         and group["label"] not in STOPWORDS
     }
@@ -439,16 +453,16 @@ def _quoted_support(text: Any, question: str, env: Mapping[str, str]) -> str:
     def score(sentence: str) -> tuple[int, int, int]:
         matched_groups = [
             group
-            for group in groups
+            for group in term_groups
             if any(_contains_term(sentence, variant) for variant in group["variants"])
         ]
         anchor_matches = sum(1 for group in matched_groups if group["label"] in anchor_labels)
         return (len(matched_groups), anchor_matches, len(sentence))
 
-    best = max(sentences, key=score)
-    if len(best) > 360:
-        return best[:357].rstrip() + "..."
-    return best
+    selected_sentence = max(sentences, key=score)
+    if len(selected_sentence) > 360:
+        return selected_sentence[:357].rstrip() + "..."
+    return selected_sentence
 
 
 def _float_env(env: Mapping[str, str], key: str, default: float) -> float:
@@ -470,57 +484,92 @@ def build_context(
     points: list[dict[str, Any]],
     env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
+    """Turn broad vector hits into source-grounded context and diagnostics.
+
+    The order is intentional: apply hard scope first, prove lexical grounding
+    before truncating to top-k, then de-duplicate and expose public-safe sources.
+    This keeps a high similarity score from being mistaken for usable evidence.
+    """
     env = env or {}
     threshold = _float_env(env, "RAG_SCORE_THRESHOLD", 0.35)
+
+    # Phase 1: apply similarity and caller-requested metadata gates.
     # Similarity is only a candidate gate. The text and metadata checks below
     # decide whether a chunk is actually usable as source-grounded context.
-    accepted = [point for point in points if float(point.get("score") or 0) >= threshold]
-    filters = parsed.get("filters") if isinstance(parsed.get("filters"), Mapping) else {}
+    candidate_points = [
+        point for point in points if float(point.get("score") or 0) >= threshold
+    ]
+    requested_filters = (
+        parsed.get("filters") if isinstance(parsed.get("filters"), Mapping) else {}
+    )
 
-    for key, value in filters.items():
-        accepted = [point for point in accepted if str(_point_payload(point).get(key) or "") == str(value)]
+    for key, value in requested_filters.items():
+        candidate_points = [
+            point
+            for point in candidate_points
+            if str(_point_payload(point).get(key) or "") == str(value)
+        ]
 
-    grounding_stats: dict[str, Any] = {"query_terms": [], "anchor_terms": [], "matched_terms": [], "term_coverage": 1}
+    grounding_diagnostics: dict[str, Any] = {
+        "query_terms": [],
+        "anchor_terms": [],
+        "matched_terms": [],
+        "term_coverage": 1,
+    }
 
     def insufficient(reason: str, extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
         return {
             "question": parsed.get("question"),
-            "filters": dict(filters),
+            "filters": dict(requested_filters),
             "exact_run_id": parsed.get("exact_run_id") or "",
             "insufficient_context": True,
             "context": "",
             "sources": [],
             "retrieval": {
-                "accepted": len(accepted),
+                "accepted": len(candidate_points),
                 "threshold": threshold,
                 "filtered_for_grounding": True,
                 "reason": reason,
-                **grounding_stats,
+                **grounding_diagnostics,
                 **dict(extra or {}),
             },
         }
 
+    # Phase 2: keep run-specific questions tied to matching evidence.
     exact_run_id = str(parsed.get("exact_run_id") or "").lower()
     if exact_run_id:
-        accepted = [point for point in accepted if exact_run_id in _metadata_haystack(point)]
+        candidate_points = [
+            point
+            for point in candidate_points
+            if exact_run_id in _metadata_haystack(point)
+        ]
 
-    exact_markers = _exact_query_markers(str(parsed.get("question") or ""))
-    if exact_markers:
-        marker_scoped = [point for point in accepted if _point_matches_marker_scope(point, exact_markers)]
-        if marker_scoped:
+    query_markers = _exact_query_markers(str(parsed.get("question") or ""))
+    if query_markers:
+        marker_scoped_points = [
+            point
+            for point in candidate_points
+            if _point_matches_marker_scope(point, query_markers)
+        ]
+        if marker_scoped_points:
             # Scope only when a matching candidate exists. Keeping the original
             # candidates on a total miss lets normal term grounding return the
             # useful refusal reason instead of hiding all retrieval diagnostics.
-            accepted = marker_scoped
+            candidate_points = marker_scoped_points
 
-    groups = _term_groups(str(parsed.get("question") or ""), env)
+    # Phase 3: require the retrieved Note text to cover the question terms.
+    term_groups = _term_groups(str(parsed.get("question") or ""), env)
     anchor_terms = [
         group["label"]
-        for group in groups
+        for group in term_groups
         if re.match(r"^[a-z0-9._/@#:-]{2,}$", group["label"])
         and group["label"] not in STOPWORDS
     ]
-    grounding_stats = {**grounding_stats, "query_terms": [group["label"] for group in groups], "anchor_terms": anchor_terms}
+    grounding_diagnostics = {
+        **grounding_diagnostics,
+        "query_terms": [group["label"] for group in term_groups],
+        "anchor_terms": anchor_terms,
+    }
     min_coverage = _float_env(env, "RAG_QUERY_TERM_MIN_COVERAGE", 0.6)
     min_matches = _int_env(env, "RAG_QUERY_TERM_MIN_MATCHES", 2)
 
@@ -528,13 +577,16 @@ def build_context(
         text = _content_haystack(point)
         matched_terms = [
             group["label"]
-            for group in groups
+            for group in term_groups
             if any(_contains_term(text, variant) for variant in group["variants"])
         ]
-        coverage = len(matched_terms) / len(groups) if groups else 1
+        coverage = len(matched_terms) / len(term_groups) if term_groups else 1
         required = (
-            min(len(groups), max(1, min_matches, math.ceil(len(groups) * min_coverage)))
-            if groups
+            min(
+                len(term_groups),
+                max(1, min_matches, math.ceil(len(term_groups) * min_coverage)),
+            )
+            if term_groups
             else 0
         )
         return {
@@ -544,67 +596,95 @@ def build_context(
             "anchors_satisfied": all(term in matched_terms for term in anchor_terms),
         }
 
-    if groups:
-        grounded = [
+    if term_groups:
+        individually_grounded = [
             {"point": point, "grounding": grounding_for_point(point)}
-            for point in accepted
+            for point in candidate_points
         ]
-        grounded = [
-            item
-            for item in grounded
-            if item["grounding"]["anchors_satisfied"]
-            and len(item["grounding"]["matched_terms"]) >= item["grounding"]["required_matches"]
+        individually_grounded = [
+            candidate
+            for candidate in individually_grounded
+            if candidate["grounding"]["anchors_satisfied"]
+            and len(candidate["grounding"]["matched_terms"])
+            >= candidate["grounding"]["required_matches"]
         ]
-        if not grounded:
+        if not individually_grounded:
             # Some questions need two chunks, for example one for a current
             # marker and one for a stated safety limitation. Combine only when
             # their union covers every anchor and the configured term minimum.
-            combined = []
+            combined_candidates = []
             combined_terms: set[str] = set()
-            candidate_items = [
-                item
-                for item in [
+            partially_grounded = [
+                candidate
+                for candidate in [
                     {"point": point, "grounding": grounding_for_point(point)}
-                    for point in accepted
+                    for point in candidate_points
                 ]
-                if item["grounding"]["matched_terms"]
+                if candidate["grounding"]["matched_terms"]
             ]
-            for item in candidate_items:
-                combined.append(item)
-                combined_terms.update(str(term) for term in item["grounding"]["matched_terms"])
+            for candidate in partially_grounded:
+                combined_candidates.append(candidate)
+                combined_terms.update(
+                    str(term) for term in candidate["grounding"]["matched_terms"]
+                )
             combined_required = (
-                min(len(groups), max(1, min_matches, math.ceil(len(groups) * min_coverage)))
-                if groups
+                min(
+                    len(term_groups),
+                    max(1, min_matches, math.ceil(len(term_groups) * min_coverage)),
+                )
+                if term_groups
                 else 0
             )
-            if combined and all(term in combined_terms for term in anchor_terms) and len(combined_terms) >= combined_required:
-                grounding_stats = {
-                    **grounding_stats,
+            if (
+                combined_candidates
+                and all(term in combined_terms for term in anchor_terms)
+                and len(combined_terms) >= combined_required
+            ):
+                grounding_diagnostics = {
+                    **grounding_diagnostics,
                     "matched_terms": sorted(combined_terms),
-                    "term_coverage": len(combined_terms) / len(groups) if groups else 1,
+                    "term_coverage": len(combined_terms) / len(term_groups),
                     "required_matches": combined_required,
                     "anchors_satisfied": True,
                     "combined_source_grounding": True,
                 }
-                accepted = [item["point"] for item in combined]
+                candidate_points = [
+                    candidate["point"] for candidate in combined_candidates
+                ]
             else:
-                best = sorted(
-                    (grounding_for_point(point) for point in accepted),
-                    key=lambda item: (len(item["matched_terms"]), item["term_coverage"]),
+                best_diagnostics = sorted(
+                    (grounding_for_point(point) for point in candidate_points),
+                    key=lambda details: (
+                        len(details["matched_terms"]),
+                        details["term_coverage"],
+                    ),
                     reverse=True,
                 )
-                return insufficient("no_query_term_coverage", best[0] if best else {})
+                return insufficient(
+                    "no_query_term_coverage",
+                    best_diagnostics[0] if best_diagnostics else {},
+                )
         else:
-            grounding_stats = {**grounding_stats, **grounded[0]["grounding"]}
-            accepted = [item["point"] for item in grounded]
+            grounding_diagnostics = {
+                **grounding_diagnostics,
+                **individually_grounded[0]["grounding"],
+            }
+            candidate_points = [
+                candidate["point"] for candidate in individually_grounded
+            ]
 
-    if not accepted:
+    if not candidate_points:
         return insufficient("no_grounded_note_context")
 
-    accepted = sorted(accepted, key=lambda point: float(point.get("score") or 0), reverse=True)
+    # Phase 4: keep the best occurrence of each Note chunk, then apply top-k.
+    candidate_points = sorted(
+        candidate_points,
+        key=lambda point: float(point.get("score") or 0),
+        reverse=True,
+    )
     seen: set[str] = set()
-    unique = []
-    for point in accepted:
+    unique_points = []
+    for point in candidate_points:
         payload = _point_payload(point)
         # Repeated indexing can return multiple records for the same note/chunk
         # while stale cleanup is in flight. Keep the highest-scoring occurrence.
@@ -618,22 +698,23 @@ def build_context(
         if key in seen:
             continue
         seen.add(key)
-        unique.append(point)
-    accepted = unique
+        unique_points.append(point)
+    candidate_points = unique_points
 
-    if not accepted:
+    if not candidate_points:
         return insufficient("no_unique_note_context")
 
-    candidate_accepted = len(accepted)
+    candidate_accepted = len(candidate_points)
     top_k = max(1, _int_env(env, "RAG_TOP_K", 5))
     # Apply the public top-k contract after grounding and de-duplication; doing
     # it at the Qdrant query would discard evidence needed by combined grounding.
-    accepted = accepted[:top_k]
+    candidate_points = candidate_points[:top_k]
 
-    sources = []
-    for point in accepted:
+    # Phase 5: expose reviewable sources and the numbered generator context.
+    public_sources = []
+    for point in candidate_points:
         payload = _point_payload(point)
-        sources.append(
+        public_sources.append(
             {
                 "title": payload.get("title") or "Untitled",
                 "note_id": payload.get("note_id"),
@@ -645,27 +726,27 @@ def build_context(
                 "quoted_support": _quoted_support(payload.get("text"), str(parsed.get("question") or ""), env),
             }
         )
-    context = "\n\n".join(
-        f"[{index + 1}] {sources[index]['title']} "
+    numbered_context = "\n\n".join(
+        f"[{index + 1}] {public_sources[index]['title']} "
         f"score={float(point.get('score') or 0):.3f} "
-        f"source_path={sources[index].get('source_path') or ''}\n"
+        f"source_path={public_sources[index].get('source_path') or ''}\n"
         f"{_point_payload(point).get('text') or ''}"
-        for index, point in enumerate(accepted)
+        for index, point in enumerate(candidate_points)
     )
     return {
         "question": parsed.get("question"),
-        "filters": dict(filters),
+        "filters": dict(requested_filters),
         "exact_run_id": parsed.get("exact_run_id") or "",
         "insufficient_context": False,
-        "context": context,
-        "sources": sources,
+        "context": numbered_context,
+        "sources": public_sources,
         "retrieval": {
-            "accepted": len(accepted),
+            "accepted": len(candidate_points),
             "candidate_accepted": candidate_accepted,
             "top_k": top_k,
             "threshold": threshold,
             "filtered_for_grounding": True,
-            **grounding_stats,
+            **grounding_diagnostics,
         },
     }
 
@@ -778,6 +859,12 @@ def answer_or_refuse(
     llm_response: Mapping[str, Any],
     env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
+    """Accept only an answer with valid citations and source-text support.
+
+    Citation structure is checked before content overlap so malformed references
+    fail with a precise reason. Every refusal returns the same public-safe answer
+    shape and keeps diagnostic details under ``retrieval``.
+    """
     env = env or {}
     sources = ctx.get("sources") if isinstance(ctx.get("sources"), list) else []
     # Quote overlap is the safe default. Structural validation remains useful
@@ -794,6 +881,7 @@ def answer_or_refuse(
             "retrieval": {**dict(retrieval), "refusal_reason": reason, **dict(extra or {})},
         }
 
+    # Phase 1: preserve an upstream retrieval refusal without invoking more policy.
     if ctx.get("insufficient_context"):
         retrieval = ctx.get("retrieval") if isinstance(ctx.get("retrieval"), Mapping) else {}
         return refuse(str(retrieval.get("reason") or "insufficient_context"))
@@ -805,6 +893,7 @@ def answer_or_refuse(
     if not answer or _normalize_refusal(answer) == _normalize_refusal(INSUFFICIENT_ANSWER):
         return refuse("empty_or_refused_answer")
 
+    # Phase 2: validate every citation, then require a valid trailing citation.
     # Scan every citation first so an invalid early citation cannot be hidden by
     # adding a valid citation at the end of the answer.
     citation_numbers: list[int | float] = []
@@ -819,30 +908,48 @@ def answer_or_refuse(
             except ValueError:
                 citation_numbers.append(float("nan"))
 
-    invalid = [number for number in citation_numbers if not isinstance(number, int) or number < 1 or number > len(sources)]
-    if invalid:
+    invalid_citations = [
+        number
+        for number in citation_numbers
+        if not isinstance(number, int) or number < 1 or number > len(sources)
+    ]
+    if invalid_citations:
         return refuse("invalid_citation")
-    valid = [number for number in citation_numbers if isinstance(number, int) and 1 <= number <= len(sources)]
+    valid_citations = [
+        number
+        for number in citation_numbers
+        if isinstance(number, int) and 1 <= number <= len(sources)
+    ]
     # The CLI uses the same trailing-citation rule. Keeping this at the API
     # seam prevents answers that pass the service from being rejected by Ask.
     trailing_match = re.search(r"(?:^|\s)\[([0-9,\s]+)\]\s*[.!?]?\s*$", answer)
-    trailing = []
+    trailing_citations = []
     if trailing_match:
         for part in trailing_match.group(1).split(","):
             try:
-                trailing.append(int(part.strip()))
+                trailing_citations.append(int(part.strip()))
             except ValueError:
-                trailing.append(float("nan"))
-    trailing_invalid = [number for number in trailing if not isinstance(number, int) or number < 1 or number > len(sources)]
-    if trailing_invalid:
+                trailing_citations.append(float("nan"))
+    invalid_trailing_citations = [
+        number
+        for number in trailing_citations
+        if not isinstance(number, int) or number < 1 or number > len(sources)
+    ]
+    if invalid_trailing_citations:
         return refuse("invalid_citation")
-    if not valid or not trailing:
+    if not valid_citations or not trailing_citations:
         return refuse("missing_valid_citation")
-    if any(not _source_has_locator(sources[number - 1]) for number in sorted(set(valid))):
+    if any(
+        not _source_has_locator(sources[number - 1])
+        for number in sorted(set(valid_citations))
+    ):
         return refuse("invalid_source_locator")
 
-    cited_sources = [sources[number - 1] for number in sorted(set(valid))]
+    cited_sources = [
+        sources[number - 1] for number in sorted(set(valid_citations))
+    ]
 
+    # Phase 3: prove the answer text is supported by the cited Quoted support.
     validation_label = "structural_citations_only"
 
     if validation_mode == "quote_overlap":
@@ -860,8 +967,8 @@ def answer_or_refuse(
             return refuse("answer_grounding_failed", {"validation": "extractive_content_mismatch"})
         validation_label = "extractive_content"
 
-    raw_retrieval = ctx.get("retrieval")
-    retrieval = raw_retrieval if isinstance(raw_retrieval, Mapping) else {}
+    retrieval_details = ctx.get("retrieval")
+    retrieval = retrieval_details if isinstance(retrieval_details, Mapping) else {}
     retrieval_payload = {key: value for key, value in retrieval.items()}
     return {
         "question": ctx.get("question"),
@@ -953,13 +1060,13 @@ def ask(
 ) -> dict[str, Any]:
     env = env or os.environ
     requester = request_json or (lambda method, url, body, headers=None: post_json(url, body, headers=headers))
-    parsed = parse_question(payload, env=env)
+    question_input = parse_question(payload, env=env)
     # Keep the webhook's historical mapping interface, but force every caller
     # through the typed retrieval/generation/validation contract below.
     question = Question(
-        text=str(parsed["question"]),
-        filters=dict(parsed.get("filters") or {}),
-        exact_run_id=str(parsed.get("exact_run_id") or ""),
+        text=str(question_input["question"]),
+        filters=dict(question_input.get("filters") or {}),
+        exact_run_id=str(question_input.get("exact_run_id") or ""),
     )
     generator: Generator
     if _env_get(env, "SYNAPSE_ANSWER_MODE", "llm").strip().lower() == "extractive":

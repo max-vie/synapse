@@ -19,6 +19,7 @@ class AskHelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescr
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the stable TUI-first and explicit one-shot command interface."""
     # - no flags: open the TUI
     # - bare question: prefill the TUI
     # - --text/--json/--raw-json/--output: one-shot script mode
@@ -68,6 +69,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Select interactive or one-shot execution without changing output shapes."""
+    # Phase 1: resolve configuration and the operator's explicit mode choice.
     # Auto-load .env so SYNAPSE_ASK_WEBHOOK_URL and SYNAPSE_WEBHOOK_AUTH_TOKEN
     # defaults work without manual export. Skip under pytest to keep tests clean.
     if "PYTEST_CURRENT_TEST" not in os.environ:
@@ -108,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
         output_format = "raw-json"
     else:
         output_format = "text"
+    # Phase 2: one-shot mode shares the same client and normalization as the TUI.
     try:
         # One-shot mode shares ask_question with the TUI so live/default/dry-run
         # behavior cannot drift between automation and the interactive app.

@@ -215,14 +215,16 @@ def render_gif() -> None:
 
 
 def main() -> int:
+    """Capture, validate, and publish the deterministic Ask TUI GIF."""
+    # Phase 1: prepare the deterministic backend and isolated display.
     require_tools()
     ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_GIF.parent.mkdir(parents=True, exist_ok=True)
 
     port = free_port()
-    server, _thread = start_harness(port)
-    env = os.environ.copy()
-    env.update({
+    harness_server, _harness_thread = start_harness(port)
+    capture_env = os.environ.copy()
+    capture_env.update({
         "DISPLAY": DISPLAY,
         "TERM": "xterm-256color",
         "LIBGL_ALWAYS_SOFTWARE": "1",
@@ -235,7 +237,7 @@ def main() -> int:
     ffmpeg = None
     try:
         time.sleep(0.5)
-        run(["xsetroot", "-solid", "#0b1220"], env=env, check=False)
+        run(["xsetroot", "-solid", "#0b1220"], env=capture_env, check=False)
 
         tui_cmd = (
             f"cd {shlex_quote(str(ROOT))}; "
@@ -256,14 +258,15 @@ def main() -> int:
             "--override", f"initial_window_height={HEIGHT}",
             "--title", "Synapse Ask Demo",
             "bash", "-lc", tui_cmd,
-        ], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ], env=capture_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        window_id = wait_for_window(env)
-        run(["xdotool", "windowmove", window_id, "0", "0"], env=env, check=False)
-        run(["xdotool", "windowsize", window_id, str(WIDTH), str(HEIGHT)], env=env, check=False)
-        run(["xdotool", "windowactivate", window_id], env=env, check=False)
+        window_id = wait_for_window(capture_env)
+        run(["xdotool", "windowmove", window_id, "0", "0"], env=capture_env, check=False)
+        run(["xdotool", "windowsize", window_id, str(WIDTH), str(HEIGHT)], env=capture_env, check=False)
+        run(["xdotool", "windowactivate", window_id], env=capture_env, check=False)
         time.sleep(1.4)  # loaded TUI visible before capture starts
 
+        # Phase 2: record the real client while the harness controls timing.
         ffmpeg = subprocess.Popen([
             "ffmpeg", "-loglevel", "error", "-y",
             "-f", "x11grab",
@@ -278,12 +281,12 @@ def main() -> int:
             "-q:v", "3",
             "-pix_fmt", "yuv420p",
             str(RAW_MP4),
-        ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=env)
+        ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=capture_env)
 
         time.sleep(INITIAL_HOLD_SECONDS)
-        type_question(window_id, env)
+        type_question(window_id, capture_env)
         time.sleep(SUBMIT_PAUSE_SECONDS)
-        run(["xdotool", "key", "--window", window_id, "Return"], env=env)
+        run(["xdotool", "key", "--window", window_id, "Return"], env=capture_env)
         time.sleep(POST_SUBMIT_RECORD_SECONDS)
 
         if ffmpeg.stdin:
@@ -302,6 +305,7 @@ def main() -> int:
             ffmpeg.stderr.close()
         ffmpeg = None
 
+        # Phase 3: render the artifact and reject visibly empty captures.
         extract_frames()
         render_gif()
 
@@ -318,7 +322,8 @@ def main() -> int:
         print(f"  Timing: initial {INITIAL_HOLD_SECONDS}s, backend {BACKEND_DELAY_SECONDS}s, final hold {FINAL_HOLD_SECONDS}s")
         return 0
     finally:
-        server.shutdown()
+        # Cleanup must run on capture failures so Xvfb/kitty/ffmpeg do not linger.
+        harness_server.shutdown()
         if ffmpeg and ffmpeg.poll() is None:
             ffmpeg.send_signal(signal.SIGINT)
             try:

@@ -123,14 +123,15 @@ def is_text_candidate(root: Path, path: Path) -> bool:
 
 
 def scan_file(root: Path, path: Path) -> list[Finding]:
+    """Check one public file for local data exposure and inflated claims."""
     findings: list[Finding] = []
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return findings
 
-    rel = relative_posix(root, path)
-    skip_hygiene = rel in HYGIENE_EXEMPT_PATHS
+    relative_path = relative_posix(root, path)
+    skip_hygiene = relative_path in HYGIENE_EXEMPT_PATHS
 
     for line_no, line in enumerate(text.splitlines(), start=1):
         if path.name == "public.py" and path.parent.name == "checks" and (

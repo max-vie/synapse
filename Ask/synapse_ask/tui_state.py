@@ -133,38 +133,48 @@ def slash_option_lines(state: dict[str, object]) -> str:
 
 
 def apply_tui_command(command: str, state: dict[str, object], notes_root: Path | None = None) -> dict[str, object]:
+    """Apply one local slash command and return an action for the UI runner."""
     # Commands update state and return a tiny action object for the event loop.
     # That split keeps the loop small and keeps command tests straightforward.
-    normalized = command.strip().lower()
+    normalized_command = command.strip().lower()
     state["slash_menu"] = False
-    if normalized in {"/q", "/quit", "quit", "exit"}:
+    if normalized_command in {"/q", "/quit", "quit", "exit"}:
         state["running"] = False
         state["status"] = "Bye"
         return {"action": "quit"}
-    if normalized == "/clear":
+    if normalized_command == "/clear":
         state["messages"] = []
         add_tui_message(state, "system", "Transcript cleared. Ask another question or use /quit.")
         state["status"] = "Cleared"
         state["scroll"] = 0
         return {"action": "continue"}
-    if normalized == "/notes" or normalized.startswith("/notes "):
+    if normalized_command == "/notes" or normalized_command.startswith("/notes "):
         return {"action": "notes", "query": command.strip()[len("/notes") : ].strip()}
-    if normalized == "/local-notes" or normalized.startswith("/local-notes "):
+    if normalized_command == "/local-notes" or normalized_command.startswith("/local-notes "):
         return {"action": "local-notes", "query": command.strip()[len("/local-notes") : ].strip()}
-    if normalized.startswith("/!") and normalized[2:].isdigit():
-        number = int(normalized[2:])
-        history = state.get("answer_history", [])
-        if isinstance(history, list) and 1 <= number <= len(history):
-            entry = history[number - 1]
-            if isinstance(entry, dict):
-                sources = entry.get("sources") if isinstance(entry.get("sources"), list) else []
-                add_tui_message(state, "assistant", str(entry.get("text") or ""), sources)
+    if normalized_command.startswith("/!") and normalized_command[2:].isdigit():
+        number = int(normalized_command[2:])
+        answer_history = state.get("answer_history", [])
+        if isinstance(answer_history, list) and 1 <= number <= len(answer_history):
+            saved_answer = answer_history[number - 1]
+            if isinstance(saved_answer, dict):
+                sources = (
+                    saved_answer.get("sources")
+                    if isinstance(saved_answer.get("sources"), list)
+                    else []
+                )
+                add_tui_message(
+                    state,
+                    "assistant",
+                    str(saved_answer.get("text") or ""),
+                    sources,
+                )
                 state["status"] = f"Answer {number} shown"
                 return {"action": "continue"}
         add_tui_message(state, "system", "No answer with that number.")
         state["status"] = "Answer not found"
         return {"action": "continue"}
-    if normalized == "/help":
+    if normalized_command == "/help":
         add_tui_message(
             state,
             "system",
@@ -176,9 +186,10 @@ def apply_tui_command(command: str, state: dict[str, object], notes_root: Path |
 
 
 def handle_tui_key(key: int, state: dict[str, object]) -> dict[str, object] | None:
+    """Translate one key into an edit, local command, or submit action."""
     # Do the editing math here instead of inside curses drawing code. It is less
     # glamorous, but it is the part most likely to break in headless tests.
-    buffer = str(state["input"])
+    input_buffer = str(state["input"])
     cursor = int(state["cursor"])
 
     if key in {KEY_CTRL_C, KEY_CTRL_Q, KEY_ESC}:
@@ -189,7 +200,7 @@ def handle_tui_key(key: int, state: dict[str, object]) -> dict[str, object] | No
     if key in {KEY_ENTER, 13, CURSES_KEY_ENTER}:
         # Enter is the one place where input turns into an action. Commands are
         # handled locally; regular text becomes a RAG question for the caller.
-        question = buffer.strip()
+        question = input_buffer.strip()
         state["input"] = ""
         state["cursor"] = 0
         if not question:
@@ -197,16 +208,16 @@ def handle_tui_key(key: int, state: dict[str, object]) -> dict[str, object] | No
             return None
         if question.startswith("/") or question in {"quit", "exit"}:
             return apply_tui_command(question, state)
-        history = state["history"]
-        assert isinstance(history, list)
-        history.append(question)
+        question_history = state["history"]
+        assert isinstance(question_history, list)
+        question_history.append(question)
         state["history_index"] = None
         return {"action": "submit", "question": question}
     if key in {KEY_BACKSPACE, 8, CURSES_KEY_BACKSPACE}:
         # Keep cursor movement and text mutation together. That makes insert,
         # backspace, and arrow-key behavior predictable in both curses and tests.
         if cursor > 0:
-            updated = buffer[: cursor - 1] + buffer[cursor:]
+            updated = input_buffer[: cursor - 1] + input_buffer[cursor:]
             state["input"] = updated
             state["cursor"] = cursor - 1
             state["slash_menu"] = updated.startswith("/")
@@ -215,13 +226,13 @@ def handle_tui_key(key: int, state: dict[str, object]) -> dict[str, object] | No
         state["cursor"] = max(0, cursor - 1)
         return None
     if key in {CURSES_KEY_RIGHT}:
-        state["cursor"] = min(len(buffer), cursor + 1)
+        state["cursor"] = min(len(input_buffer), cursor + 1)
         return None
     if key in {CURSES_KEY_HOME}:
         state["cursor"] = 0
         return None
     if key in {CURSES_KEY_END}:
-        state["cursor"] = len(buffer)
+        state["cursor"] = len(input_buffer)
         return None
     if key in {CURSES_KEY_PPAGE}:
         state["scroll"] = int(state["scroll"]) + 5
@@ -231,7 +242,7 @@ def handle_tui_key(key: int, state: dict[str, object]) -> dict[str, object] | No
         return None
     if 32 <= key <= 126:
         char = chr(key)
-        updated = buffer[:cursor] + char + buffer[cursor:]
+        updated = input_buffer[:cursor] + char + input_buffer[cursor:]
         state["input"] = updated
         state["cursor"] = cursor + 1
         state["slash_menu"] = updated.startswith("/")

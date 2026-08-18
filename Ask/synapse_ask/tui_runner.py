@@ -30,12 +30,14 @@ def thinking_status(frame_index: int = 0) -> str:
     spinner = THINKING_SPINNER_FRAMES[frame_index % len(THINKING_SPINNER_FRAMES)]
     return f"{spinner} Thinking"
 
+
 def animate_pending_tui_request(
     state: dict[str, object],
     placeholder: dict[str, object],
     future: concurrent.futures.Future[dict[str, object]],
     on_thinking=None,
 ) -> None:
+    """Keep the visible spinner moving while one blocking request runs."""
     frame_index = 0
     while not future.done():
         status = thinking_status(frame_index)
@@ -150,6 +152,7 @@ def submit_tui_question(
     on_thinking=None,
     on_answer_reveal=None,
 ) -> None:
+    """Run one question and replace its placeholder with one final outcome."""
     # Add the user's question immediately, then replace the placeholder as the
     # request moves from "thinking" to either an error or the final answer.
     add_tui_message(state, "user", question)
@@ -158,7 +161,7 @@ def submit_tui_question(
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             # Run the blocking HTTP/local preview work off the UI thread so the
             # spinner still moves while the request is waiting on Synapse.
-            future = executor.submit(
+            request_future = executor.submit(
                 ask_question,
                 question,
                 webhook_url,
@@ -172,16 +175,30 @@ def submit_tui_question(
                 dry_run_enabled,
                 debug=debug,
             )
-            animate_pending_tui_request(state, placeholder, future, on_thinking)
-            result = normalize_rag_result(future.result(), require_sources=bool(webhook_url and not dry_run_enabled))
-        answer = display_answer_text(result, "No answer returned.")
-        sources = result_sources(result)
-        if is_error_result(result):
-            replace_tui_message(placeholder, "error", answer)
+            animate_pending_tui_request(
+                state,
+                placeholder,
+                request_future,
+                on_thinking,
+            )
+            normalized_result = normalize_rag_result(
+                request_future.result(),
+                require_sources=bool(webhook_url and not dry_run_enabled),
+            )
+        answer_text = display_answer_text(normalized_result, "No answer returned.")
+        source_items = result_sources(normalized_result)
+        if is_error_result(normalized_result):
+            replace_tui_message(placeholder, "error", answer_text)
             state["status"] = "Request failed"
         else:
-            animate_tui_answer_reveal(state, placeholder, answer, sources, on_answer_reveal)
-            remember_tui_answer(state, answer, sources)
+            animate_tui_answer_reveal(
+                state,
+                placeholder,
+                answer_text,
+                source_items,
+                on_answer_reveal,
+            )
+            remember_tui_answer(state, answer_text, source_items)
     except Exception as exc:  # noqa: BLE001 - TUI should surface readable errors.
         replace_tui_message(placeholder, "error", f"Request failed: {exc}")
         state["status"] = "Request failed"
@@ -202,6 +219,7 @@ def run_curses_tui(
     debug: bool = False,
     vault_path: str | None = None,
 ) -> int:
+    """Run the full-screen event loop using pure state transitions."""
     # The real app loop is deliberately boring: draw current state, read one
     # key, turn that key into an action, then handle only the action here.
     state = new_tui_state(initial_question)
@@ -216,23 +234,35 @@ def run_curses_tui(
             key = screen.getch()
         except KeyboardInterrupt:
             break
-        action = handle_tui_key(key, state)
-        if action and action.get("action") == "notes":
+        input_action = handle_tui_key(key, state)
+        if input_action and input_action.get("action") == "notes":
             try:
-                add_indexed_notes_message(state, webhook_url, str(action.get("query") or ""), timeout, auth_token, dry_run_enabled, debug)
+                add_indexed_notes_message(
+                    state,
+                    webhook_url,
+                    str(input_action.get("query") or ""),
+                    timeout,
+                    auth_token,
+                    dry_run_enabled,
+                    debug,
+                )
             except Exception as exc:  # noqa: BLE001 - TUI should surface readable command errors.
                 add_tui_message(state, "error", f"Request failed: {exc}")
                 state["status"] = "Request failed"
-        if action and action.get("action") == "local-notes":
+        if input_action and input_action.get("action") == "local-notes":
             try:
-                add_local_notes_message(state, str(action.get("query") or ""), vault_path)
+                add_local_notes_message(
+                    state,
+                    str(input_action.get("query") or ""),
+                    vault_path,
+                )
             except Exception as exc:  # noqa: BLE001
                 add_tui_message(state, "error", f"Local vault error: {exc}")
                 state["status"] = "Local vault error"
-        if action and action.get("action") == "submit":
+        if input_action and input_action.get("action") == "submit":
             submit_tui_question(
                 state,
-                str(action["question"]),
+                str(input_action["question"]),
                 webhook_url,
                 note_path,
                 timeout,
@@ -266,9 +296,11 @@ def run_line_tui(
     debug: bool = False,
     vault_path: str | None = None,
 ) -> int:
+    """Run the same command/question flow without requiring a curses terminal."""
     # This is both a fallback for machines without curses and the test seam for
     # the interactive path. It is not fancy, but it lets CI exercise the same
     # command/question flow without needing a real terminal.
+    # Phase 1: render the same startup contract used by the full-screen UI.
     color_enabled = sys.stdout.isatty() if use_color is None else use_color
     state = new_tui_state(initial_question)
     startup_mode = "dry-run" if dry_run_enabled else "live"
@@ -289,14 +321,46 @@ def run_line_tui(
 
     if initial_question:
         try:
-            result = ask_question(initial_question, webhook_url, note_path, timeout, auth_token, source_path, note_id, wiki_path, exact_run_id, dry_run_enabled, debug=debug)
-            result = normalize_rag_result(result, require_sources=bool(webhook_url and not dry_run_enabled))
+            initial_result = ask_question(
+                initial_question,
+                webhook_url,
+                note_path,
+                timeout,
+                auth_token,
+                source_path,
+                note_id,
+                wiki_path,
+                exact_run_id,
+                dry_run_enabled,
+                debug=debug,
+            )
+            initial_result = normalize_rag_result(
+                initial_result,
+                require_sources=bool(webhook_url and not dry_run_enabled),
+            )
         except Exception as exc:  # noqa: BLE001 - CLI should surface readable errors.
-            result = {"mode": "error", "answer": f"Request failed: {exc}", "sources": []}
-        output_func(render_tui_screen(initial_question, result, webhook_url, color_enabled, dry_run_enabled=dry_run_enabled))
-        if not is_error_result(result):
-            remember_tui_answer(state, display_answer_text(result, "No answer returned."), result_sources(result))
+            initial_result = {
+                "mode": "error",
+                "answer": f"Request failed: {exc}",
+                "sources": [],
+            }
+        output_func(
+            render_tui_screen(
+                initial_question,
+                initial_result,
+                webhook_url,
+                color_enabled,
+                dry_run_enabled=dry_run_enabled,
+            )
+        )
+        if not is_error_result(initial_result):
+            remember_tui_answer(
+                state,
+                display_answer_text(initial_result, "No answer returned."),
+                result_sources(initial_result),
+            )
 
+    # Phase 2: parse commands locally; only ordinary questions reach Synapse.
     while True:
         try:
             question = input_func("synapse> ").strip()
@@ -311,12 +375,15 @@ def run_line_tui(
         # apply_tui_command parser that curses mode uses, so both modes
         # have identical command behaviour.
         if question.startswith("/") or question in {"quit", "exit"}:
-            before = len(state.get("messages", []))
-            action = apply_tui_command(question, state)
-            if action.get("action") == "quit":
+            previous_message_count = len(state.get("messages", []))
+            command_action = apply_tui_command(question, state)
+            if command_action.get("action") == "quit":
                 output_func("bye")
                 return 0
-            if action.get("action") == "continue" and question.strip().lower() == "/clear":
+            if (
+                command_action.get("action") == "continue"
+                and question.strip().lower() == "/clear"
+            ):
                 if color_enabled:
                     output_func("\033c")
                 output_func(
@@ -329,31 +396,84 @@ def run_line_tui(
                     )
                 )
                 continue
-            if action.get("action") == "notes":
+            if command_action.get("action") == "notes":
                 try:
-                    add_indexed_notes_message(state, webhook_url, str(action.get("query") or ""), timeout, auth_token, dry_run_enabled, debug)
+                    add_indexed_notes_message(
+                        state,
+                        webhook_url,
+                        str(command_action.get("query") or ""),
+                        timeout,
+                        auth_token,
+                        dry_run_enabled,
+                        debug,
+                    )
                 except Exception as exc:  # noqa: BLE001 - command should be readable in line mode.
                     add_tui_message(state, "error", f"Request failed: {exc}")
-            if action.get("action") == "local-notes":
+            if command_action.get("action") == "local-notes":
                 try:
-                    add_local_notes_message(state, str(action.get("query") or ""), vault_path)
+                    add_local_notes_message(
+                        state,
+                        str(command_action.get("query") or ""),
+                        vault_path,
+                    )
                 except Exception as exc:  # noqa: BLE001
                     add_tui_message(state, "error", f"Local vault error: {exc}")
-            messages = state.get("messages")
-            if action.get("action") == "unknown":
+            session_messages = state.get("messages")
+            if command_action.get("action") == "unknown":
                 output_func(f"Unknown command: {question}")
-            elif isinstance(messages, list) and len(messages) > before:
-                output_func("\n".join(str(message.get("text", "")) for message in messages[before:] if isinstance(message, dict)))
+            elif (
+                isinstance(session_messages, list)
+                and len(session_messages) > previous_message_count
+            ):
+                output_func(
+                    "\n".join(
+                        str(message.get("text", ""))
+                        for message in session_messages[previous_message_count:]
+                        if isinstance(message, dict)
+                    )
+                )
             continue
 
+        # Phase 3: normalize and render all live/dry-run outcomes identically.
         try:
-            result = ask_question(question, webhook_url, note_path, timeout, auth_token, source_path, note_id, wiki_path, exact_run_id, dry_run_enabled, debug=debug)
-            result = normalize_rag_result(result, require_sources=bool(webhook_url and not dry_run_enabled))
+            question_result = ask_question(
+                question,
+                webhook_url,
+                note_path,
+                timeout,
+                auth_token,
+                source_path,
+                note_id,
+                wiki_path,
+                exact_run_id,
+                dry_run_enabled,
+                debug=debug,
+            )
+            question_result = normalize_rag_result(
+                question_result,
+                require_sources=bool(webhook_url and not dry_run_enabled),
+            )
         except Exception as exc:  # noqa: BLE001 - CLI should surface readable errors.
-            result = {"mode": "error", "answer": f"Request failed: {exc}", "sources": []}
-        output_func(render_tui_screen(question, result, webhook_url, color_enabled, dry_run_enabled=dry_run_enabled))
-        if not is_error_result(result):
-            remember_tui_answer(state, display_answer_text(result, "No answer returned."), result_sources(result))
+            question_result = {
+                "mode": "error",
+                "answer": f"Request failed: {exc}",
+                "sources": [],
+            }
+        output_func(
+            render_tui_screen(
+                question,
+                question_result,
+                webhook_url,
+                color_enabled,
+                dry_run_enabled=dry_run_enabled,
+            )
+        )
+        if not is_error_result(question_result):
+            remember_tui_answer(
+                state,
+                display_answer_text(question_result, "No answer returned."),
+                result_sources(question_result),
+            )
 
 
 def run_tui(
@@ -373,6 +493,7 @@ def run_tui(
     debug: bool = False,
     vault_path: str | None = None,
 ) -> int:
+    """Select curses or line mode without hiding unexpected terminal failures."""
     # Tests pass fake input/output functions, real users get curses when it is
     # available, and CI still has a line-mode escape hatch for known init
     # failures. Unexpected TUI errors propagate unless the user explicitly opts
@@ -429,4 +550,3 @@ def run_tui(
             f"Synapse Ask TUI failed: {exc}\n"
             f"Set SYNAPSE_ASK_FALLBACK_ON_TUI_ERROR=true to fall back to line mode."
         ) from exc
-

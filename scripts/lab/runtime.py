@@ -198,6 +198,7 @@ class Lab:
         self.wait_http("Synapse API", f"http://127.0.0.1:{port}/readyz", attempts=45)
 
     def up(self) -> None:
+        """Start infrastructure, prepare models/indexes, then start Synapse."""
         # Verify Docker and Compose before creating local state. A missing
         # prerequisite should not leave a new .env or secrets directory behind.
         self._select_compose()
@@ -261,6 +262,7 @@ class Lab:
         self.proof("real")
 
     def mocked_proof(self) -> None:
+        """Run the disposable Compose proof and always remove its state."""
         artifact_dir = self.root / ".local-artifacts" / "ci-e2e"
         ci_env = artifact_dir / ".env"
         envfile.create_from_template(self.root / ".env.example", ci_env, force=True)
@@ -330,6 +332,7 @@ class Lab:
         self.compose("--profile", "infra", "--profile", "full", "down", "--remove-orphans")
 
     def remove(self, *, yes: bool = False) -> None:
+        """Remove only the explicitly listed local-lab state after confirmation."""
         targets = [path for path in (self.env_path, self.root / ".local-artifacts") if path.exists()]
         print("Removal targets:")
         print("- Docker containers, network, and named volumes")

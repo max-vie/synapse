@@ -197,6 +197,7 @@ def render_tui_screen(
     width: int | None = None,
     dry_run_enabled: bool = False,
 ) -> str:
+    """Render the line-mode screen with the same source-safety policy as TUI."""
     # Plain-text renderer used by tests and by the line-mode fallback. The full
     # curses UI has its own renderer farther down.
     width = width or terminal_width()
@@ -233,6 +234,7 @@ def render_tui_screen(
 
 
 def format_one_shot_output(result: dict[str, object], output_format: str, *, require_sources: bool = False) -> str:
+    """Render exactly one documented machine or human-readable output shape."""
     # Script users choose exactly one stable output shape. --json keeps the compatibility
     # wrapper, while --raw-json is for callers that want the webhook object.
     result = normalize_rag_result(result, require_sources=require_sources)
@@ -243,4 +245,3 @@ def format_one_shot_output(result: dict[str, object], output_format: str, *, req
     if output_format == "raw-json":
         return json.dumps(result, indent=2, ensure_ascii=False)
     raise ValueError(f"unsupported output format: {output_format}")
-
