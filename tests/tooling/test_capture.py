@@ -20,6 +20,6 @@ def test_capture_harness_preserves_full_rag_answer_contract(monkeypatch):
     finally:
         server.shutdown()
         server.server_close()
-    assert capture_ask_gif.FINAL_HOLD_SECONDS == 6.0
-    assert "Shortest Path First" in payload["answer"]
+    assert capture_ask_gif.FINAL_HOLD_SECONDS == 10.0
+    assert "Qdrant" in payload["answer"]
     assert payload["sources"][0]["source_path"] == capture_ask_gif.SOURCE_PATH

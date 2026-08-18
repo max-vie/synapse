@@ -474,6 +474,20 @@ def test_runtime_exposes_ingest_answer_and_notes(monkeypatch):
     assert runtime.indexed_notes({"query": "ospf"}) == {"notes": ["ospf"]}
 
 
+def test_runtime_binds_http_timeout_to_frozen_settings(monkeypatch):
+    captured = {}
+
+    def fake_request_json(method, url, payload, headers=None, timeout=None):
+        captured["timeout"] = timeout
+        return {"ok": True}
+
+    monkeypatch.setattr(runtime_module, "request_json", fake_request_json)
+    runtime = SynapseRuntime.from_env({"SYNAPSE_HTTP_TIMEOUT_SECONDS": "7"})
+
+    assert runtime.transport.request("GET", "http://example.test", {}) == {"ok": True}
+    assert captured["timeout"] == 7.0
+
+
 def test_application_factory_routes_through_injected_runtime(monkeypatch):
     class Runtime:
         def answer_question(self, payload):
@@ -489,6 +503,38 @@ def test_application_factory_routes_through_injected_runtime(monkeypatch):
     client = TestClient(create_app(Runtime()))
     assert client.post("/webhook/synapse/ask", json={"question": "hello"}).json()["answer"] == "hello"
     assert client.post("/webhook/synapse/index-note", json={"content": "note"}).json()["status"] == "indexed"
+
+
+@pytest.mark.parametrize("raw_value", ["1", "true", "yes", "on"])
+def test_auth_disabled_uses_the_same_boolean_contract_as_settings(monkeypatch, raw_value):
+    monkeypatch.setenv("SYNAPSE_AUTH_DISABLED", raw_value)
+    monkeypatch.setattr(service, "ask", lambda payload: {"answer": "ok", "sources": []})
+
+    response = TestClient(service.app).post("/ask", json={"question": "hello"})
+
+    assert response.status_code == 200
+
+
+def test_application_factory_can_freeze_runtime_settings_at_the_seam(monkeypatch):
+    class Runtime:
+        def answer_question(self, payload):
+            return {"answer": payload["question"], "sources": []}
+
+        def indexed_notes(self, payload):
+            return {"notes": [], "count": 0}
+
+        def ingest_note(self, payload):
+            return {"status": "ok"}
+
+    monkeypatch.setenv("SYNAPSE_AUTH_DISABLED", "true")
+    settings = Settings.from_env({"SYNAPSE_AUTH_DISABLED": "false", "SYNAPSE_WEBHOOK_AUTH_TOKEN": "fixed-token"})
+    client = TestClient(create_app(Runtime(), settings=settings))
+
+    denied = client.post("/ask", json={"question": "hello"})
+    accepted = client.post("/ask", json={"question": "hello"}, headers={"X-Synapse-Token": "fixed-token"})
+
+    assert denied.status_code == 401
+    assert accepted.status_code == 200
 
 
 def test_http_timeout_parsing_is_bounded(monkeypatch):

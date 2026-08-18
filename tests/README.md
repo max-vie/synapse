@@ -6,6 +6,7 @@ The normal suite protects public interfaces without Docker, network access, real
 make test
 python -m pytest -q
 python -m pytest tests/app/test_rag.py -q
+make evaluate
 ```
 
 ## Structure
@@ -18,6 +19,10 @@ python -m pytest tests/app/test_rag.py -q
 | `contracts/` | Package version, Compose safety defaults, image pins, CI gates, and reviewer example data |
 
 `conftest.py` isolates Synapse environment variables so a sourced local `.env` cannot change test results.
+
+`make evaluate` runs the deterministic source-grounded evaluation. Its in-memory
+adapters prove policy behavior and report grounding, refusal, citation, and
+prompt-injection metrics; they do not measure a live model's answer quality.
 
 ## Rules
 

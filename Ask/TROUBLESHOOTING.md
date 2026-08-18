@@ -132,8 +132,8 @@ make proof
 Ask a question that is directly answerable from an indexed note:
 
 ```bash
-python3 "Ask/ask.py" --raw-json "What algorithm does OSPF use?" \
-  --source-path "Synapse-Demo/example-study-notes.md"
+python3 "Ask/ask.py" --raw-json "What tools make up my knowledge system, and what are they used for?" \
+  --source-path "Synapse-Demo/knowledge-system-notes.md"
 ```
 
 If this works, the issue is probably the original question or filter scope.

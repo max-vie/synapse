@@ -102,6 +102,8 @@ def normalize_markdown_note_path(vault_relative_path: str) -> str:
     ingest boundary rejects traversal, ambiguous, and collision-prone names before
     any publishing or indexing work starts.
     """
+    # Normalize separators and Unicode before validating so equivalent paths
+    # cannot receive different identities or source locators.
     path = unicodedata.normalize("NFC", str(vault_relative_path or "").replace("\\", "/"))
     if not path:
         raise ValueError("note path is required")
@@ -120,6 +122,8 @@ def normalize_markdown_note_path(vault_relative_path: str) -> str:
     if any(part == "" for part in parts):
         raise ValueError("note path must not contain empty segments")
     for part in parts:
+        # These checks protect both the filesystem-facing source path and the
+        # Wiki.js/Qdrant identifiers derived from it.
         if part in {".", ".."} or part.startswith("."):
             raise ValueError("note path must not contain dot segments")
         if part != part.strip() or part.endswith("."):
@@ -150,6 +154,8 @@ def build_metadata(vault_relative_path: str, content: str, source: str = "obsidi
     slug = slugify(title)
     note_id = deterministic_uuid("note", f"{SCHEMA_VERSION}:{source}:{path.lower()}")
     content_hash = sha256_hex(normalized_content)
+    # The title is editable display data. The vault path owns publication
+    # identity so renaming a heading updates one page instead of creating two.
     wiki_path = "/" + "/".join(slugify(part) for part in PurePosixPath(path).with_suffix("").parts)
     return NoteMetadata(
         schema_version=SCHEMA_VERSION,

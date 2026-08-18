@@ -30,6 +30,7 @@ def test_local_compose_contract_is_authenticated_private_and_bounded():
     assert environment["SYNAPSE_WEBHOOK_AUTH_TOKEN_FILE"] == "/run/secrets/synapse_webhook_auth_token"
     assert environment["WIKIJS_API_TOKEN_FILE"] == "/run/secrets/wikijs_api_token"
     assert environment["SYNAPSE_AUTH_DISABLED"] == "${SYNAPSE_AUTH_DISABLED:-false}"
+    assert environment["SYNAPSE_ANSWER_VALIDATION"] == "${SYNAPSE_ANSWER_VALIDATION:-quote_overlap}"
     assert environment["SYNAPSE_MAX_REQUEST_BYTES"] == "${SYNAPSE_MAX_REQUEST_BYTES:-1048576}"
     assert environment["SYNAPSE_MAX_CONTENT_BYTES"] == "${SYNAPSE_MAX_CONTENT_BYTES:-262144}"
     assert environment["SYNAPSE_MAX_PARALLEL_EXECUTIONS"] == "${SYNAPSE_MAX_PARALLEL_EXECUTIONS:-2}"
@@ -74,14 +75,14 @@ def test_ci_keeps_monthly_security_scan_and_mocked_proof():
     assert "Skipping local-only image" not in scanner
 
 
-def test_example_note_supports_the_reviewer_demo():
-    content = (ROOT / "examples/obsidian-vault/Synapse-Demo/example-study-notes.md").read_text(encoding="utf-8")
-    assert content.startswith("# Example Study Notes\n")
-    assert "Dijkstra's Shortest Path First (SPF) algorithm" in content
-    assert all(term in content for term in ("IP address", "DNS", "Qdrant"))
+def test_knowledge_system_note_supports_the_reviewer_demo():
+    content = (ROOT / "examples/obsidian-vault/Synapse-Demo/knowledge-system-notes.md").read_text(encoding="utf-8")
+    assert content.startswith("# My Knowledge System\n")
+    assert "What tools make up my knowledge system" in content
+    assert all(term in content for term in ("Markdown", "Ollama", "Qdrant", "Wiki.js", "Ask"))
 
 
 def test_make_help_exposes_the_supported_workflow():
     result = subprocess.run(["make", "help"], cwd=ROOT, text=True, capture_output=True, check=True)
-    for command in ("make lab-up", "make configure", "make proof", "make check", "make remove"):
+    for command in ("make lab-up", "make configure", "make proof", "make evaluate", "make check", "make remove"):
         assert command in result.stdout

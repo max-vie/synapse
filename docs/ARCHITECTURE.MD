@@ -48,7 +48,21 @@ FastAPI is used as the single Synapse service boundary. It keeps webhook auth, r
 
 Production modules live in `src/synapse/`. Repository operations are separate: `scripts.lab` owns the local Compose lifecycle, `scripts.proof` owns evidence scenarios, and benchmark/capture tooling stays optional.
 
+## Code map
+
+- `metadata.py`: pure note identity, path safety, hashing, and chunking policy.
+- `ingest.py`: note limits, formatting, Qdrant replacement, Wiki.js publishing, rollback, and deletion ordering.
+- `rag.py`: typed `Question`, `RetrievedChunk`, `Source`, and `AnswerResult` values plus the retriever, generator, and validator interfaces.
+- `ask.py`: grounding policy and the Ollama/Qdrant adapters behind the typed RAG seam.
+- `runtime.py`: the transport adapter and the three operations exposed to the HTTP layer.
+- `service.py`: authentication, request limits, readiness, concurrency, and compatibility route registration.
+- `scripts/evaluate.py`: deterministic in-memory evaluation proof; it does not call a model or network service.
+
+When changing retrieval behavior, start at `rag.py` and `ask.py`. When changing note lifecycle behavior, start at `metadata.py` and `ingest.py`. Keep the HTTP layer thin so those policies remain testable without Docker.
+
 The service preserves the compatibility webhook paths `/webhook/synapse/note`, `/webhook/synapse/index-note`, `/webhook/synapse/ask`, and `/webhook/synapse/notes`, while also exposing direct `/ingest`, `/ask`, `/notes`, `/healthz`, and `/readyz` endpoints for tests and future clients.
+
+The source-grounded RAG interface is `Question -> AnswerResult`. Qdrant retrieval, Ollama generation, and answer validation are adapters behind `Retriever`, `Generator`, and `AnswerValidator` ports. The HTTP layer injects a frozen `Settings` value and `SynapseRuntime` at the application seam; the module-level app remains only as a compatibility adapter for local callers.
 
 ## Why Markdown notes
 
@@ -92,7 +106,7 @@ Every note gets a deterministic `note_id` from its source and path. Synapse refu
 
 For publish requests, Synapse formats the note, upserts new Qdrant chunks with `content_hash`, `revision`, `updated_at`, and `ingest_job_id`, verifies the expected new chunk count, publishes the matching Wiki.js page, and only then removes stale chunks for the same `note_id`. For index-only requests, stale chunks are removed after the verified upsert because no Wiki.js publish is involved.
 
-This prevents duplicate-index buildup when the same note is edited and reprocessed, and avoids a visible Wiki.js page getting ahead of a failed Qdrant update. It is still a local-lab consistency model, not a distributed transaction.
+This prevents duplicate-index buildup when the same note is edited and reprocessed, and avoids a visible Wiki.js page getting ahead of a failed Qdrant update. Publication identity is derived from the normalized vault path, so a title change updates the same Wiki.js path. A delete request removes Qdrant chunks before attempting Wiki.js page deletion; this keeps stale content out of grounded answers if the publisher is unavailable. It is still a local-lab consistency model, not a distributed transaction.
 
 ## Localhost exposure model
 
@@ -122,6 +136,7 @@ Use `make lab-down` to stop containers while preserving volumes. Do not run `doc
 The Synapse API owns both compatibility webhooks and direct service endpoints:
 
 - `POST /webhook/synapse/note`: authenticated note ingest; formats, publishes to Wiki.js, indexes Qdrant, and returns JSON evidence.
+- `POST /webhook/synapse/note` with `delete: true`: removes the stable note identity from Qdrant and Wiki.js.
 - `POST /webhook/synapse/index-note`: authenticated index-only ingest; disables publishing and formatting for proof checks.
 - `POST /webhook/synapse/ask`: authenticated Ask/RAG query; supports optional filters such as `note_id`, `source_path`, `wiki_path`, and `exact_run_id`.
 - `POST /webhook/synapse/notes`: authenticated indexed Markdown note listing; used by Ask `/notes` to list live indexed sources.
@@ -161,12 +176,12 @@ A valid response shape is:
     }
   ],
   "retrieval": {
-    "answer_validation": "structural_citations_only"
+    "answer_validation": "quote_overlap"
   }
 }
 ```
 
-Future quality improvements can add extractive mode, reranking, source-overlap scoring, or a second verifier model. This lab does not claim the structural citation gate proves factual correctness.
+The default `quote_overlap` gate checks citation mechanics and overlap with quoted support. `structural` remains available as an explicitly diagnostic mode, while `extractive` requires the answer to appear in quoted support. This lab does not claim overlap proves factual correctness; the deterministic evaluation and real-stack proof report separate contract evidence from model quality.
 
 ## Metadata model
 

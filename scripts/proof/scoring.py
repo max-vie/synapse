@@ -197,10 +197,16 @@ def score_sources(answer: str, expected_sources: Iterable[str] | None, required_
             expected_indices = set(range(1, source_count + 1))
         citation_numbers = [
             int(part.strip())
-            for match in re.finditer(r"(?:^|\s)\[([0-9,\s]+)\](?=\s*(?:[.!?,]|$))", answer_text)
+            for match in re.finditer(r"(?:^|\s)\[([0-9,\s]+)\](?=\s*[.!?,]?(?:\s|$))", answer_text)
             for part in match.group(1).split(",")
             if part.strip().isdigit()
         ]
+        # The terminal client only renders a grounded answer when the final
+        # sentence carries the citation. Keep offline proof scoring identical to
+        # the API and client contract.
+        trailing_match = re.search(r"(?:^|\s)\[([0-9,\s]+)\]\s*[.!?]?\s*$", answer_text)
+        if not trailing_match and citation_numbers:
+            errors.append("expected a trailing source citation")
         invalid = [number for number in citation_numbers if number < 1 or number > source_count]
         valid = [number for number in citation_numbers if number in expected_indices]
         required_cited = min(required_source_count, len(expected_indices)) if expected_indices else required_source_count

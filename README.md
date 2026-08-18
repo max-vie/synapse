@@ -9,7 +9,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](docs/ARCHITECTURE.MD#service-roles)
 [![Qdrant](https://img.shields.io/badge/Qdrant-DC244C?logo=qdrant&logoColor=white)](docs/ARCHITECTURE.MD#service-roles)
 
-![Synapse Ask TUI answering an OSPF question from indexed notes](docs/assets/synapse-ask-real-tui-ospf.gif)
+![Synapse Ask TUI answering a knowledge-system question from indexed notes](docs/assets/synapse-ask-knowledge-system.gif)
 
 ## Project overview
 
@@ -17,7 +17,8 @@ Synapse is a small local infrastructure lab for testing an AI-assisted notes wor
 
 - running the stack locally with Docker Compose;
 - connecting Markdown notes to a RAG workflow;
-- proving the result with scripts, logs, and evidence.
+- proving the result with scripts, logs, and evidence;
+- evaluating grounding, refusal, citation, and prompt-injection behavior without network access.
 
 ## Quick lab flow
 
@@ -43,6 +44,12 @@ More detail: [Setup guide](docs/SETUP.md). For the short command list, run:
 make help
 ```
 
+The deterministic AI contract evaluation is available without Docker:
+
+```bash
+make evaluate
+```
+
 ## Workflow
 
 ```mermaid
@@ -63,7 +70,9 @@ flowchart LR
 
 ## Docs
 
+- [Documentation index](docs/README.md)
 - [Setup](docs/SETUP.md)
 - [Architecture](docs/ARCHITECTURE.MD)
+- [Context glossary](CONTEXT.md)
 - [Version policy](docs/VERSION_POLICY.md)
 - [Ask](Ask/README.md)

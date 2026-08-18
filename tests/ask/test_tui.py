@@ -191,7 +191,7 @@ def test_slash_menu_and_help_describe_indexed_notes_and_answer_history():
 def test_notes_command_requests_live_indexed_notes_not_local_demo_files(tmp_path):
     notes_dir = tmp_path / "vault"
     notes_dir.mkdir()
-    (notes_dir / "example-study-notes.md").write_text("# Example Study Notes\n", encoding="utf-8")
+    (notes_dir / "knowledge-system-notes.md").write_text("# My Knowledge System\n", encoding="utf-8")
 
     state = ask_tui_state.new_tui_state()
     result = ask_tui_state.apply_tui_command("/notes ospf", state, notes_root=notes_dir)
@@ -203,7 +203,7 @@ def test_notes_command_requests_live_indexed_notes_not_local_demo_files(tmp_path
 def test_local_notes_command_returns_local_notes_action(tmp_path):
     notes_dir = tmp_path / "vault"
     notes_dir.mkdir()
-    (notes_dir / "example-study-notes.md").write_text("# Example Study Notes\n", encoding="utf-8")
+    (notes_dir / "knowledge-system-notes.md").write_text("# My Knowledge System\n", encoding="utf-8")
 
     state = ask_tui_state.new_tui_state()
     result = ask_tui_state.apply_tui_command("/local-notes", state, notes_root=notes_dir)

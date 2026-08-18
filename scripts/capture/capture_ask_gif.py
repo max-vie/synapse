@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate docs/assets/synapse-ask-real-tui-ospf.gif.
+"""Regenerate docs/assets/synapse-ask-knowledge-system.gif.
 
 This captures the real Synapse Ask curses TUI inside a headless kitty terminal,
 drives human-like typing with xdotool, records terminal pixels with ffmpeg, and
@@ -15,12 +15,13 @@ Usage from the repository root:
 
 Capture contract:
     - terminal size: 100x30-ish, rendered in a 1280x800 headless X display
-    - typed question: What algorithm does OSPF use?
+    - typed question: What tools make up my knowledge system, and what are they used for?
     - initial loaded-TUI hold: 2.6s
     - human typing: deterministic per-character variation
     - backend thinking delay: 1.2s
-    - final answer/source hold: 6.0s
-    - output: docs/assets/synapse-ask-real-tui-ospf.gif
+    - final answer/source hold: 10.0s
+    - raw video encoder: ``SYNAPSE_CAPTURE_ENCODER`` or portable ``mpeg4``
+    - output: docs/assets/synapse-ask-knowledge-system.gif
 """
 
 from __future__ import annotations
@@ -39,15 +40,15 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[2]
-OUTPUT_GIF = ROOT / "docs" / "assets" / "synapse-ask-real-tui-ospf.gif"
+OUTPUT_GIF = ROOT / "docs" / "assets" / "synapse-ask-knowledge-system.gif"
 ARTIFACT_DIR = ROOT / ".local-artifacts" / "capture"
-GENERATED_GIF = ARTIFACT_DIR / "synapse-ask-real-tui-ospf.generated.gif"
-RAW_MP4 = ARTIFACT_DIR / "synapse-ask-real-tui-ospf.raw.mp4"
-PALETTE = ARTIFACT_DIR / "synapse-ask-real-tui-ospf.palette.png"
-CONTACT = ARTIFACT_DIR / "synapse-ask-real-tui-ospf.contact.png"
-FIRST_FRAME = ARTIFACT_DIR / "synapse-ask-real-tui-ospf.first.png"
-FINAL_FRAME = ARTIFACT_DIR / "synapse-ask-real-tui-ospf.final.png"
-MID_FRAME = ARTIFACT_DIR / "synapse-ask-real-tui-ospf.answer.png"
+GENERATED_GIF = ARTIFACT_DIR / "synapse-ask-knowledge-system.generated.gif"
+RAW_MP4 = ARTIFACT_DIR / "synapse-ask-knowledge-system.raw.mp4"
+PALETTE = ARTIFACT_DIR / "synapse-ask-knowledge-system.palette.png"
+CONTACT = ARTIFACT_DIR / "synapse-ask-knowledge-system.contact.png"
+FIRST_FRAME = ARTIFACT_DIR / "synapse-ask-knowledge-system.first.png"
+FINAL_FRAME = ARTIFACT_DIR / "synapse-ask-knowledge-system.final.png"
+MID_FRAME = ARTIFACT_DIR / "synapse-ask-knowledge-system.answer.png"
 
 DISPLAY_NUM = os.environ.get("SYNAPSE_CAPTURE_DISPLAY", "99")
 DISPLAY = f":{DISPLAY_NUM}"
@@ -55,14 +56,15 @@ WIDTH = 1280
 HEIGHT = 800
 FPS = 30
 GIF_FPS = 18
-QUESTION = "What algorithm does OSPF use?"
-SOURCE_PATH = "Synapse-Demo/example-study-notes.md"
+RAW_ENCODER = os.environ.get("SYNAPSE_CAPTURE_ENCODER", "mpeg4")
+QUESTION = "What tools make up my knowledge system, and what are they used for?"
+SOURCE_PATH = "Synapse-Demo/knowledge-system-notes.md"
 WEBHOOK_TOKEN = "capture-demo-token"
 
 INITIAL_HOLD_SECONDS = 2.6
 SUBMIT_PAUSE_SECONDS = 0.35
 BACKEND_DELAY_SECONDS = 1.2
-FINAL_HOLD_SECONDS = 6.0
+FINAL_HOLD_SECONDS = 10.0
 POST_SUBMIT_RECORD_SECONDS = BACKEND_DELAY_SECONDS + 1.2 + FINAL_HOLD_SECONDS
 
 
@@ -108,16 +110,16 @@ class AskHandler(http.server.BaseHTTPRequestHandler):
         else:
             payload = {
                 "question": QUESTION,
-                "answer": "OSPF uses Dijkstra's Shortest Path First algorithm. [1]",
+                "answer": "Markdown notes are the source of truth; Synapse coordinates note intake and questions, Ollama provides local models, Qdrant stores searchable vectors, Wiki.js publishes readable copies, and Ask provides the terminal interface. [1]",
                 "insufficient_context": False,
                 "sources": [
                     {
-                        "title": "Example Study Notes",
+                        "title": "My Knowledge System",
                         "source_path": SOURCE_PATH,
-                        "wiki_path": "/synapse-demo/example-study-notes",
-                        "note_id": "5c4195ea-b2d3-57e2-8e81-a641198a22f2",
+                        "wiki_path": "/synapse-demo/knowledge-system-notes",
+                        "note_id": "4f732329-46eb-5692-bed4-290890901e2c",
                         "chunk_index": 0,
-                        "quoted_support": "OSPF uses Dijkstra's Shortest Path First (SPF) algorithm.",
+                        "quoted_support": "Markdown notes are the source of truth. The Synapse FastAPI service coordinates note intake and questions. Ollama provides local formatting, embedding, and answer generation. Qdrant stores searchable vector chunks. Wiki.js stores a readable published copy. The Ask CLI/TUI is the terminal interface for questions.",
                     }
                 ],
                 "retrieval": {
@@ -263,17 +265,20 @@ def main() -> int:
         time.sleep(1.4)  # loaded TUI visible before capture starts
 
         ffmpeg = subprocess.Popen([
-            "ffmpeg", "-y",
+            "ffmpeg", "-loglevel", "error", "-y",
             "-f", "x11grab",
             "-draw_mouse", "0",
             "-framerate", str(FPS),
             "-video_size", f"{WIDTH}x{HEIGHT}",
             "-i", DISPLAY,
-            "-codec:v", "libx264",
-            "-preset", "veryfast",
+            # Fedora's ffmpeg build may omit libx264. The intermediate MP4 only
+            # feeds GIF conversion, so use a portable encoder by default while
+            # allowing CI or a workstation to override it.
+            "-codec:v", RAW_ENCODER,
+            "-q:v", "3",
             "-pix_fmt", "yuv420p",
             str(RAW_MP4),
-        ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+        ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=env)
 
         time.sleep(INITIAL_HOLD_SECONDS)
         type_question(window_id, env)
@@ -282,9 +287,19 @@ def main() -> int:
         time.sleep(POST_SUBMIT_RECORD_SECONDS)
 
         if ffmpeg.stdin:
-            ffmpeg.stdin.write(b"q\n")
-            ffmpeg.stdin.flush()
+            # ffmpeg may stop itself after an X11/display error. Treat a closed
+            # stdin as a recorder failure to report after collecting stderr.
+            try:
+                ffmpeg.stdin.write("q\n")
+                ffmpeg.stdin.flush()
+            except BrokenPipeError:
+                pass
         ffmpeg.wait(timeout=15)
+        if ffmpeg.returncode != 0:
+            detail = ffmpeg.stderr.read().strip() if ffmpeg.stderr else ""
+            raise RuntimeError(f"ffmpeg screen capture failed (exit {ffmpeg.returncode}): {detail}")
+        if ffmpeg.stderr:
+            ffmpeg.stderr.close()
         ffmpeg = None
 
         extract_frames()

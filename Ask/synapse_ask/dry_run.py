@@ -22,7 +22,7 @@ def _normalize_md_extension(path_str: str) -> str:
 def local_note_metadata_path(note_path: Path) -> str:
     # Produce a public-safe path that is useful to the reader:
     #   1. Inside the demo vault → path relative to examples/obsidian-vault
-    #      (e.g. "Synapse-Demo/example-study-notes.md")
+    #      (e.g. "Synapse-Demo/knowledge-system-notes.md")
     #   2. Inside the repo → path relative to the project root
     #      (e.g. "docs/architecture.md")
     #   3. Outside both → basename only, no absolute path leakage

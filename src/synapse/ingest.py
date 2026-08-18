@@ -108,13 +108,10 @@ def note_from_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     if payload.get("title"):
         title = str(payload["title"]).strip()
         if title:
+            # A title override changes display metadata only. Do not derive a
+            # second Wiki.js path from it; the normalized vault path is stable.
             metadata["title"] = title
             metadata["slug"] = slugify(title)
-            # Recompute wiki_path so the last segment uses the title-derived slug
-            parts = [part for part in metadata["vault_relative_path"].split("/") if part]
-            dir_parts = [slugify(p) for p in parts[:-1]]
-            file_slug = metadata["slug"]
-            metadata["wiki_path"] = "/" + "/".join(dir_parts + [file_slug]) if dir_parts else "/" + file_slug
     metadata["path_parts"] = [part for part in metadata["vault_relative_path"].split("/") if part]
     metadata["content"] = content
     return metadata
@@ -151,6 +148,8 @@ def format_markdown(note: Mapping[str, Any], env: Mapping[str, str], request_jso
 
 def prepare_publish_payload(note: Mapping[str, Any], formatted: str) -> dict[str, Any]:
     note = with_revision(note)
+    # Wiki.js gets a readable formatted copy, but the original source is kept
+    # in the same page so reviewers can compare presentation with truth.
     source_block = "\n\n## Original Source Note\n\n" + str(note.get("content") or "").strip() + "\n"
     frontmatter = "\n".join(
         [
@@ -202,6 +201,8 @@ def publish_wikijs(item: Mapping[str, Any], env: Mapping[str, str], request_json
 
     path = str(item["wiki_path"]).lstrip("/")
     lookup_query = "query ($path: String!, $locale: String!) { pages { singleByPath(path: $path, locale: $locale) { id path title } } }"
+    # Wiki.js deployments differ on whether lookup accepts a leading slash.
+    # Probe both forms before deciding that a stable page needs creation.
     list_data = gql(lookup_query, {"path": "/" + path, "locale": locale})
     page_data = list_data.get("pages", {}).get("singleByPath") if isinstance(list_data.get("pages"), Mapping) else None
     if not page_data:
@@ -230,6 +231,72 @@ def publish_wikijs(item: Mapping[str, Any], env: Mapping[str, str], request_json
         if not response_result.get("succeeded"):
             raise UpstreamError("upstream_wikijs_error", f"Wiki.js create failed: {response_result.get('message') or 'unknown error'}")
     return result
+
+
+def delete_qdrant_chunks(item: Mapping[str, Any], env: Mapping[str, str], request_json: JsonRequester) -> None:
+    """Remove every indexed chunk for a stable note identity."""
+    qdrant = _base_url(env, "QDRANT_BASE_URL", "http://qdrant:6333")
+    collection = _env_get(env, "QDRANT_COLLECTION", "synapse_notes")
+    request_json(
+        "POST",
+        f"{qdrant}/collections/{collection}/points/delete?wait=true",
+        {"filter": {"must": [{"key": "note_id", "match": {"value": item["note_id"]}}]}},
+        {"Content-Type": "application/json"},
+    )
+
+
+def delete_wikijs(item: Mapping[str, Any], env: Mapping[str, str], request_json: JsonRequester) -> dict[str, Any]:
+    """Delete the page at the note's stable publication path, if present."""
+    base = _base_url(env, "WIKIJS_BASE_URL", "http://wikijs:3000")
+    token = _env_get(env, "WIKIJS_API_TOKEN")
+    locale = _env_get(env, "WIKIJS_LOCALE", "en")
+    if not token:
+        raise ValueError("Missing WIKIJS_API_TOKEN")
+
+    def gql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        response = request_json(
+            "POST",
+            f"{base}/graphql",
+            {"query": query, "variables": variables},
+            {"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+        )
+        errors = response.get("errors")
+        not_found_lookup = (
+            "singleByPath" in query
+            and isinstance(errors, list)
+            and errors
+            and all(
+                isinstance(error, Mapping)
+                and str(error.get("message") or "").casefold() == "this page does not exist."
+                for error in errors
+            )
+        )
+        if isinstance(errors, list) and errors and not not_found_lookup:
+            messages = "; ".join(str(error.get("message") if isinstance(error, Mapping) else error) for error in errors)
+            raise UpstreamError("upstream_wikijs_error", f"Wiki.js GraphQL error: {messages}")
+        data = response.get("data")
+        return data if isinstance(data, dict) else {}
+
+    path = str(item["wiki_path"]).lstrip("/")
+    lookup_query = "query ($path: String!, $locale: String!) { pages { singleByPath(path: $path, locale: $locale) { id path title } } }"
+    # Deletion uses the same path lookup rules as publishing so a title change
+    # cannot strand the page under a different display slug.
+    list_data = gql(lookup_query, {"path": "/" + path, "locale": locale})
+    page_data = list_data.get("pages", {}).get("singleByPath") if isinstance(list_data.get("pages"), Mapping) else None
+    if not page_data:
+        list_data = gql(lookup_query, {"path": path, "locale": locale})
+        page_data = list_data.get("pages", {}).get("singleByPath") if isinstance(list_data.get("pages"), Mapping) else None
+    if not isinstance(page_data, Mapping) or not page_data.get("id"):
+        return {"status": "not_found"}
+
+    result = gql(
+        "mutation Delete($id:Int!){ pages { remove(id:$id){ responseResult { succeeded errorCode message } } } }",
+        {"id": int(page_data["id"])},
+    )
+    response_result = result.get("pages", {}).get("remove", {}).get("responseResult", {})
+    if not response_result.get("succeeded"):
+        raise UpstreamError("upstream_wikijs_error", f"Wiki.js delete failed: {response_result.get('message') or 'unknown error'}")
+    return {"status": "deleted", "page_id": int(page_data["id"]), "wiki_path": str(item["wiki_path"])}
 
 
 def _batched(values: list[Any], size: int) -> list[list[Any]]:
@@ -360,6 +427,8 @@ def index_qdrant(item: Mapping[str, Any], env: Mapping[str, str], request_json: 
     )
     result = count_response.get("result") if isinstance(count_response.get("result"), Mapping) else {}
     indexed_count = result.get("count", count_response.get("count"))
+    # Never remove the previous revision until Qdrant confirms every new point
+    # exists. This is the local replacement transaction's verification step.
     if indexed_count != len(points):
         raise UpstreamError("upstream_qdrant_error", f"Qdrant replacement verification failed: expected {len(points)} points for new content_hash, found {indexed_count}")
     if delete_stale:
@@ -379,13 +448,43 @@ def ingest(
     note = with_revision(note_from_payload(payload))
     publish = bool(payload.get("publish", True))
     should_format = bool(payload.get("format", publish))
+    delete_requested = bool(payload.get("delete", False))
     with note_update_lock(str(note["note_id"])):
+        if delete_requested:
+            # Remove searchable state first. If publishing deletion fails, the
+            # page remains visible but cannot be returned as grounded evidence.
+            delete_qdrant_chunks(note, env, requester)
+            if publish:
+                wiki_result = delete_wikijs(note, env, requester)
+                publisher_status = "deleted"
+            else:
+                wiki_result = {"status": "skipped"}
+                publisher_status = "skipped"
+            return {
+                **note,
+                "status": "deleted",
+                "publisher": "wikijs" if publish else None,
+                "publisher_status": publisher_status,
+                "wikijs_result": wiki_result,
+                "indexed_chunks": 0,
+                "chunks": 0,
+                "qdrant_collection": _env_get(env, "QDRANT_COLLECTION", "synapse_notes"),
+            }
         if should_format:
             formatted = format_markdown(note, env, requester)
         else:
             formatted = str(payload.get("formatted_markdown") or note["content"])
-        item = prepare_publish_payload(note, formatted) if publish else with_revision({**note, "formatted_markdown": formatted})
-        index_item = {**item, "index_markdown": note["content"]} if publish else item
+        item = (
+            prepare_publish_payload(note, formatted)
+            if publish
+            else with_revision({**note, "formatted_markdown": formatted})
+        )
+        # Publish order is deliberate: index the original source, publish the
+        # readable page, then remove stale vectors after both sides succeeded.
+        # Index-only requests use their provided formatted content instead.
+        index_item = (
+            {**item, "index_markdown": note["content"]} if publish else item
+        )
         indexed_chunks = index_qdrant(index_item, env, requester, delete_stale=not publish)
         if publish:
             try:

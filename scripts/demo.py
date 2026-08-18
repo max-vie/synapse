@@ -51,7 +51,7 @@ def verify_metadata_subset():
 
 
 def dry_run_ask() -> dict[str, Any]:
-    note = ROOT / "examples/obsidian-vault/Synapse-Demo/example-study-notes.md"
+    note = ROOT / "examples/obsidian-vault/Synapse-Demo/knowledge-system-notes.md"
     result = run(
         [
             sys.executable,
@@ -60,7 +60,7 @@ def dry_run_ask() -> dict[str, Any]:
             "--json",
             "--note",
             str(note.relative_to(ROOT)),
-            "What algorithm does OSPF use?",
+            "What tools make up my knowledge system, and what are they used for?",
         ],
         env={"SYNAPSE_ASK_WEBHOOK_URL": "", "SYNAPSE_WEBHOOK_AUTH_TOKEN": "", "SYNAPSE_AUTH_DISABLED": "true"},
         capture=True,

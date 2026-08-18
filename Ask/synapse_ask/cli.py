@@ -33,7 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
               python3 Ask/ask.py --no-color
               python3 Ask/ask.py --text "What is Synapse?"
               python3 Ask/ask.py --json "What is Synapse?"
-              python3 Ask/ask.py --dry-run --raw-json "What algorithm does OSPF use?" --note "examples/obsidian-vault/Synapse-Demo/example-study-notes.md"
+              python3 Ask/ask.py --dry-run --raw-json "What tools make up my knowledge system, and what are they used for?" --note "examples/obsidian-vault/Synapse-Demo/knowledge-system-notes.md"
 
             Modes:
               No arguments opens the interactive TUI.

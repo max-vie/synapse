@@ -1,4 +1,4 @@
-.PHONY: help demo install check test lab-up configure lab-down lab-status lab-logs proof \
+.PHONY: help demo evaluate install check test lab-up configure lab-down lab-status lab-logs proof \
 	mocked-fastapi-qdrant-e2e real-local-stack-proof clean remove update-check start-synapse
 
 PYTHON ?= python3
@@ -12,6 +12,7 @@ help:
 		"  make configure   Check manual Wiki.js API/token setup" \
 		"  make proof       Run the live lab proof after configure" \
 		"  make demo        Run the no-network reviewer demo" \
+		"  make evaluate    Run the no-network source-grounded AI evaluation" \
 		"  make check       Run local release checks" \
 		"  make test        Run tests" \
 		"  make lab-down    Stop the local lab without deleting data" \
@@ -25,6 +26,9 @@ help:
 
 demo:
 	$(PYTHON) scripts/demo.py
+
+evaluate:
+	$(PYTHON) -m scripts.evaluate
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"

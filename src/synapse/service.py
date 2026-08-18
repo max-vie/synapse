@@ -6,11 +6,11 @@ Python ingest and Ask modules.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
 import threading
-import asyncio
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -26,14 +26,13 @@ from .runtime import SynapseRuntime
 from .settings import Settings
 from .upstream import UpstreamError
 
-app = FastAPI(title="Synapse API", version=__version__)
-
 DEFAULT_MAX_REQUEST_BYTES = 1_048_576
 
 
-def _max_parallel() -> int:
+def _max_parallel(env: Mapping[str, str] | None = None) -> int:
+    values = env if env is not None else os.environ
     try:
-        return max(1, int(float(os.environ.get("SYNAPSE_MAX_PARALLEL_EXECUTIONS", "2"))))
+        return max(1, int(float(values.get("SYNAPSE_MAX_PARALLEL_EXECUTIONS", "2"))))
     except ValueError:
         return 2
 
@@ -49,18 +48,25 @@ class RequestTooLargeError(ValueError):
     """Raised before parsing a request body that exceeds the configured limit."""
 
 
-def _run_limited(handler: Callable[[], dict[str, Any]]) -> dict[str, Any]:
-    if not _WORK_SEMAPHORE.acquire(blocking=False):
+def _run_limited(handler: Callable[[], dict[str, Any]], semaphore: threading.BoundedSemaphore | None = None) -> dict[str, Any]:
+    # The handlers use blocking stdlib HTTP. The semaphore limits that work
+    # before it enters the thread pool, keeping a slow local model from starving
+    # the whole FastAPI process.
+    work_semaphore = semaphore or _WORK_SEMAPHORE
+    if not work_semaphore.acquire(blocking=False):
         raise BusyError("too many concurrent Synapse requests; retry later")
     try:
         return handler()
     finally:
-        _WORK_SEMAPHORE.release()
+        work_semaphore.release()
 
 
-async def _read_body_json(request: Request) -> dict[str, Any]:
+async def _read_body_json(request: Request, env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    values = env if env is not None else os.environ
+    # Content-Length is only an early rejection. Streaming the body is still
+    # required because chunked requests may omit it or declare it incorrectly.
     try:
-        max_bytes = max(0, int(float(os.environ.get("SYNAPSE_MAX_REQUEST_BYTES", str(DEFAULT_MAX_REQUEST_BYTES)))))
+        max_bytes = max(0, int(float(values.get("SYNAPSE_MAX_REQUEST_BYTES", str(DEFAULT_MAX_REQUEST_BYTES)))))
     except ValueError:
         max_bytes = DEFAULT_MAX_REQUEST_BYTES
     content_length = request.headers.get("content-length")
@@ -92,23 +98,27 @@ def _json_error(status: int, error_code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error_code": error_code, "error": message})
 
 
-async def _run_endpoint(path: str, handler: Callable[[], dict[str, Any]]) -> JSONResponse:
+async def _run_endpoint(
+    path: str,
+    handler: Callable[[], dict[str, Any]],
+    semaphore: threading.BoundedSemaphore | None = None,
+) -> JSONResponse:
     try:
-        return JSONResponse(status_code=200, content=await asyncio.to_thread(_run_limited, handler))
+        return JSONResponse(status_code=200, content=await asyncio.to_thread(_run_limited, handler, semaphore))
     except BusyError as error:
         return _json_error(429, "rate_limited", str(error))
     except ValueError as error:
         return _json_error(400, "bad_request", str(error))
     except UpstreamError as error:
-        print(f"synapse-api upstream error on {path}: code={error.error_code} detail={error.detail}", file=sys.stderr, flush=True)
+        print(f"synapse-api upstream error on {path}: code={error.error_code}", file=sys.stderr, flush=True)
         return _json_error(502, error.error_code, "upstream service unavailable")
     except Exception as error:  # noqa: BLE001 - callers need JSON instead of traceback text.
-        print(f"synapse-api error on {path}: {type(error).__name__}: {error}", file=sys.stderr, flush=True)
+        print(f"synapse-api error on {path}: {type(error).__name__}", file=sys.stderr, flush=True)
         return _json_error(502, "internal_error", "internal service error")
 
 
 def _auth_disabled(env: Mapping[str, str] = os.environ) -> bool:
-    return env.get("SYNAPSE_AUTH_DISABLED", "false").strip().casefold() == "true"
+    return Settings.from_env(env).boolean("SYNAPSE_AUTH_DISABLED")
 
 
 def _expected_token(env: Mapping[str, str] = os.environ) -> str:
@@ -144,7 +154,6 @@ def _with_index_only_flags(payload: dict[str, Any]) -> dict[str, Any]:
     return updated
 
 
-@app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
@@ -220,128 +229,73 @@ def _check_readiness(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     return {"status": "ready" if all_ok else "not_ready", "checks": checks}
 
 
-@app.get("/readyz")
-def readyz() -> JSONResponse:
-    result = _check_readiness()
+def readyz(env: Mapping[str, str] | None = None) -> JSONResponse:
+    result = _check_readiness(env)
     status_code = 200 if result["status"] == "ready" else 503
     return JSONResponse(status_code=status_code, content=result)
 
 
-async def _handle_ask(request: Request) -> JSONResponse:
-    """Internal ask handler: parse body, dispatch to ask module."""
-    try:
-        body = await _read_body_json(request)
-    except RequestTooLargeError as error:
-        return _json_error(413, "payload_too_large", str(error))
-    except json.JSONDecodeError as error:
-        return _json_error(400, "bad_request", f"invalid JSON: {error.msg}")
-    except ValueError as error:
-        return _json_error(400, "bad_request", str(error))
-    return await _run_endpoint("/ask", lambda: ask(body))
+def create_app(runtime: SynapseRuntime | None = None, settings: Settings | Mapping[str, str] | None = None) -> FastAPI:
+    """Create an application with one injected runtime and settings seam.
 
+    The module-level application intentionally keeps dynamic environment
+    compatibility for existing local callers. Production and tests can pass a
+    frozen ``Settings`` value so auth, request limits, readiness, and work
+    concurrency do not read ambient process state.
+    """
+    existing_app = globals().get("app")
+    if runtime is None and settings is None and isinstance(existing_app, FastAPI):
+        # Preserve the module-level compatibility app for old local callers;
+        # production and tests pass explicit dependencies through this seam.
+        return existing_app
 
-async def _handle_notes(request: Request) -> JSONResponse:
-    """Internal notes handler: list Markdown notes present in the live index."""
-    try:
-        body = await _read_body_json(request)
-    except RequestTooLargeError as error:
-        return _json_error(413, "payload_too_large", str(error))
-    except json.JSONDecodeError as error:
-        return _json_error(400, "bad_request", f"invalid JSON: {error.msg}")
-    except ValueError as error:
-        return _json_error(400, "bad_request", str(error))
-    return await _run_endpoint("/notes", lambda: list_indexed_notes(body))
+    fixed_settings = None
+    if settings is not None:
+        fixed_settings = settings if isinstance(settings, Settings) else Settings.from_env(settings)
+    elif isinstance(runtime, SynapseRuntime):
+        fixed_settings = runtime.settings
 
+    def current_settings() -> Settings:
+        # Frozen settings make the application deterministic. Only the legacy
+        # module-level app resolves env on each request for compatibility.
+        return fixed_settings if fixed_settings is not None else Settings.from_env()
 
-async def _handle_ingest(request: Request) -> JSONResponse:
-    """Internal ingest handler: parse body, dispatch to ingest module."""
-    try:
-        body = await _read_body_json(request)
-    except RequestTooLargeError as error:
-        return _json_error(413, "payload_too_large", str(error))
-    except json.JSONDecodeError as error:
-        return _json_error(400, "bad_request", f"invalid JSON: {error.msg}")
-    except ValueError as error:
-        return _json_error(400, "bad_request", str(error))
-    return await _run_endpoint("/ingest", lambda: ingest(body))
-
-
-async def _require_auth(request: Request) -> JSONResponse | None:
-    """Check auth; return error response if failed, None if OK."""
-    error = _auth_error(request)
-    if error:
-        return _json_error(401, "unauthorized", error)
-    return None
-
-
-@app.post("/webhook/synapse/ask")
-@app.post("/ask")
-async def ask_endpoint(request: Request) -> JSONResponse:
-    auth_err = await _require_auth(request)
-    if auth_err:
-        return auth_err
-    return await _handle_ask(request)
-
-
-@app.post("/webhook/synapse/notes")
-@app.post("/notes")
-async def notes_endpoint(request: Request) -> JSONResponse:
-    auth_err = await _require_auth(request)
-    if auth_err:
-        return auth_err
-    return await _handle_notes(request)
-
-
-@app.post("/webhook/synapse/note")
-@app.post("/ingest")
-async def ingest_endpoint(request: Request) -> JSONResponse:
-    auth_err = await _require_auth(request)
-    if auth_err:
-        return auth_err
-    return await _handle_ingest(request)
-
-@app.post("/webhook/synapse/index-note")
-async def webhook_index_note_endpoint(request: Request) -> JSONResponse:
-    auth_err = await _require_auth(request)
-    if auth_err:
-        return auth_err
-    try:
-        body = await _read_body_json(request)
-    except RequestTooLargeError as error:
-        return _json_error(413, "payload_too_large", str(error))
-    except json.JSONDecodeError as error:
-        return _json_error(400, "bad_request", f"invalid JSON: {error.msg}")
-    except ValueError as error:
-        return _json_error(400, "bad_request", str(error))
-    return await _run_endpoint("/webhook/synapse/index-note", lambda: ingest(_with_index_only_flags(body)))
-
-
-def create_app(runtime: SynapseRuntime | None = None) -> FastAPI:
-    """Create an application using an injected runtime at the external seam."""
-    if runtime is None:
-        return app
-
+    semaphore = threading.BoundedSemaphore(_max_parallel(fixed_settings))
     application = FastAPI(title="Synapse API", version=__version__)
 
+    def dispatch(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if runtime is not None:
+            # Injected runtimes keep route code unaware of Ollama, Qdrant, Wiki.js,
+            # and their transport details.
+            handlers = {
+                "ask": runtime.answer_question,
+                "notes": runtime.indexed_notes,
+                "ingest": runtime.ingest_note,
+                "index": lambda value: runtime.ingest_note(_with_index_only_flags(dict(value))),
+            }
+            return handlers[operation](payload)
+        handlers = {
+            "ask": ask,
+            "notes": list_indexed_notes,
+            "ingest": ingest,
+            "index": lambda value: ingest(_with_index_only_flags(value)),
+        }
+        return handlers[operation](payload)
+
     async def authenticated(request: Request, operation: str) -> JSONResponse:
-        error = _auth_error(request)
+        request_settings = current_settings()
+        error = _auth_error(request, request_settings)
         if error:
             return _json_error(401, "unauthorized", error)
         try:
-            body = await _read_body_json(request)
+            body = await _read_body_json(request, request_settings)
         except RequestTooLargeError as exc:
             return _json_error(413, "payload_too_large", str(exc))
         except json.JSONDecodeError as exc:
             return _json_error(400, "bad_request", f"invalid JSON: {exc.msg}")
         except ValueError as exc:
             return _json_error(400, "bad_request", str(exc))
-        handlers = {
-            "ask": runtime.answer_question,
-            "notes": runtime.indexed_notes,
-            "ingest": runtime.ingest_note,
-            "index": lambda payload: runtime.ingest_note(_with_index_only_flags(dict(payload))),
-        }
-        return await _run_endpoint(request.url.path, lambda: handlers[operation](body))
+        return await _run_endpoint(request.url.path, lambda: dispatch(operation, body), semaphore)
 
     async def ask_route(request: Request) -> JSONResponse:
         return await authenticated(request, "ask")
@@ -355,8 +309,11 @@ def create_app(runtime: SynapseRuntime | None = None) -> FastAPI:
     async def index_route(request: Request) -> JSONResponse:
         return await authenticated(request, "index")
 
+    def ready_route() -> JSONResponse:
+        return readyz(current_settings())
+
     application.add_api_route("/healthz", healthz, methods=["GET"])
-    application.add_api_route("/readyz", readyz, methods=["GET"])
+    application.add_api_route("/readyz", ready_route, methods=["GET"])
     for path in ("/ask", "/webhook/synapse/ask"):
         application.add_api_route(path, ask_route, methods=["POST"])
     for path in ("/notes", "/webhook/synapse/notes"):
@@ -365,6 +322,9 @@ def create_app(runtime: SynapseRuntime | None = None) -> FastAPI:
         application.add_api_route(path, ingest_route, methods=["POST"])
     application.add_api_route("/webhook/synapse/index-note", index_route, methods=["POST"])
     return application
+
+
+app = create_app()
 
 
 def main() -> int:
@@ -376,7 +336,12 @@ def main() -> int:
         host = ".".join(("0", "0", "0", "0")) if os.environ.get("SYNAPSE_CONTAINER_BIND") == "true" else "127.0.0.1"
     settings = Settings.from_env()
     settings.validate()
-    uvicorn.run(create_app(SynapseRuntime.from_env(settings)), host=host, port=port, log_level=os.environ.get("SYNAPSE_UVICORN_LOG_LEVEL", "info"))
+    uvicorn.run(
+        create_app(SynapseRuntime.from_env(settings), settings=settings),
+        host=host,
+        port=port,
+        log_level=os.environ.get("SYNAPSE_UVICORN_LOG_LEVEL", "info"),
+    )
     return 0
 
 

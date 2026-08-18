@@ -27,6 +27,9 @@ class JsonTransport(Protocol):
 class StdlibJsonAdapter:
     """Production adapter for Ollama, Qdrant, and Wiki.js HTTP calls."""
 
+    def __init__(self, timeout_seconds: float | None = None) -> None:
+        self.timeout_seconds = timeout_seconds
+
     def request(
         self,
         method: str,
@@ -34,7 +37,9 @@ class StdlibJsonAdapter:
         payload: dict[str, Any],
         headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        return request_json(method, url, payload, headers)
+        # Bind the timeout when the runtime is built. Request handling should
+        # not silently change because another caller mutates process env.
+        return request_json(method, url, payload, headers, timeout=self.timeout_seconds)
 
 
 @dataclass(frozen=True)
@@ -46,7 +51,11 @@ class SynapseRuntime:
 
     @classmethod
     def from_env(cls, values: Mapping[str, str] | None = None) -> "SynapseRuntime":
-        return cls(Settings.from_env(values), StdlibJsonAdapter())
+        settings = Settings.from_env(values)
+        timeout_seconds = float(settings.integer("SYNAPSE_HTTP_TIMEOUT_SECONDS", 180, minimum=1))
+        # The runtime owns settings and transport together, so the HTTP seam
+        # cannot accidentally use a different timeout source.
+        return cls(settings, StdlibJsonAdapter(timeout_seconds))
 
     def ingest_note(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return ingest(payload, env=self.settings, request_json=self.transport.request)

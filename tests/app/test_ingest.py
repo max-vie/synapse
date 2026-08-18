@@ -76,7 +76,7 @@ def test_note_from_payload_builds_metadata_and_path_parts():
     assert note["vault_relative_path"] == "Synapse-Demo/ospf.md"
     assert note["title"] == "OSPF Override"
     assert note["slug"] == "ospf-override"
-    assert note["wiki_path"] == "/synapse-demo/ospf-override"
+    assert note["wiki_path"] == "/synapse-demo/ospf"
     assert note["path_parts"] == ["Synapse-Demo", "ospf.md"]
     assert note["content"].endswith("\n")
 
@@ -86,15 +86,15 @@ def test_title_override_keeps_slug_and_wiki_path_consistent():
 
     assert note["title"] == "OSPF Deep Dive"
     assert note["slug"] == "ospf-deep-dive"
-    assert note["wiki_path"] == "/lab/ospf-deep-dive"
+    assert note["wiki_path"] == "/lab/ospf-notes"
 
 
-def test_title_override_in_root_path_recomputes_wiki_path():
+def test_title_override_in_root_path_keeps_wiki_path_stable():
     note = note_from_payload({"path": "simple.md", "content": "# Content\nBody", "title": "Renamed Note"})
 
     assert note["title"] == "Renamed Note"
     assert note["slug"] == "renamed-note"
-    assert note["wiki_path"] == "/renamed-note"
+    assert note["wiki_path"] == "/simple"
 
 
 def test_no_title_override_uses_path_derived_wiki_path():
@@ -105,11 +105,20 @@ def test_no_title_override_uses_path_derived_wiki_path():
     assert note["wiki_path"] == "/lab/ospf-notes"
 
 
-def test_title_override_in_nested_dir_recomputes_all_slug_segments():
+def test_title_override_in_nested_dir_keeps_path_segments_stable():
     note = note_from_payload({"path": "Infra/Networking/ospf.md", "content": "# Content", "title": "New Title"})
 
     assert note["slug"] == "new-title"
-    assert note["wiki_path"] == "/infra/networking/new-title"
+    assert note["wiki_path"] == "/infra/networking/ospf"
+
+
+def test_title_changes_keep_note_and_publication_identity_stable():
+    original = note_from_payload({"path": "Lab/ospf.md", "content": "# Old Title\nBody"})
+    renamed = note_from_payload({"path": "Lab/ospf.md", "content": "# New Title\nBody"})
+
+    assert original["note_id"] == renamed["note_id"]
+    assert original["wiki_path"] == renamed["wiki_path"] == "/lab/ospf"
+    assert original["title"] != renamed["title"]
 
 
 def test_note_from_payload_rejects_missing_path():
@@ -718,3 +727,54 @@ def test_ingest_publish_no_rollback_on_success():
     # Only one delete call: the stale-chunk cleanup (must_not on content_hash), not a rollback
     assert len(delete_calls) == 1
     assert "must_not" in delete_calls[0]["body"]["filter"], "success path uses stale cleanup, not rollback"
+
+
+def test_ingest_delete_removes_qdrant_before_published_page():
+    calls = []
+
+    def request_json(method, url, body, headers=None):
+        calls.append({"method": method, "url": url, "body": body, "headers": headers or {}})
+        if url.endswith("/points/delete?wait=true"):
+            return {"result": {"status": "ok"}}
+        if url.endswith("/graphql") and "singleByPath" in body.get("query", ""):
+            return {"data": {"pages": {"singleByPath": {"id": 42, "path": "lab/ospf", "title": "Old Title"}}}}
+        if url.endswith("/graphql") and "mutation Delete" in body.get("query", ""):
+            return {"data": {"pages": {"remove": {"responseResult": {"succeeded": True, "message": ""}}}}}
+        raise AssertionError(f"unexpected request: {method} {url}")
+
+    result = ingest(
+        {"path": "Lab/ospf.md", "delete": True},
+        env={"QDRANT_BASE_URL": "http://qdrant:6333", "WIKIJS_BASE_URL": "http://wikijs:3000", "WIKIJS_API_TOKEN": "token"},
+        request_json=request_json,
+    )
+
+    assert result["status"] == "deleted"
+    assert result["publisher_status"] == "deleted"
+    assert result["wiki_path"] == "/lab/ospf"
+    delete_index = next(index for index, call in enumerate(calls) if "/points/delete" in call["url"])
+    graphql_index = next(index for index, call in enumerate(calls) if "mutation Delete" in call["body"].get("query", ""))
+    assert delete_index < graphql_index
+    assert calls[delete_index]["body"]["filter"]["must"] == [{"key": "note_id", "match": {"value": result["note_id"]}}]
+    assert calls[graphql_index]["body"]["variables"] == {"id": 42}
+
+
+def test_ingest_delete_treats_missing_published_page_as_success():
+    calls = []
+
+    def request_json(method, url, body, headers=None):
+        calls.append({"method": method, "url": url, "body": body})
+        if url.endswith("/points/delete?wait=true"):
+            return {"result": {"status": "ok"}}
+        if url.endswith("/graphql") and "singleByPath" in body.get("query", ""):
+            return {"data": {"pages": {"singleByPath": None}}}
+        raise AssertionError(f"unexpected request: {method} {url}")
+
+    result = ingest(
+        {"path": "Lab/missing.md", "delete": True},
+        env={"QDRANT_BASE_URL": "http://qdrant:6333", "WIKIJS_BASE_URL": "http://wikijs:3000", "WIKIJS_API_TOKEN": "token"},
+        request_json=request_json,
+    )
+
+    assert result["status"] == "deleted"
+    assert result["wikijs_result"] == {"status": "not_found"}
+    assert not any("mutation Delete" in call["body"].get("query", "") for call in calls)

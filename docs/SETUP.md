@@ -4,6 +4,8 @@ This guide gets you from a fresh clone to a started local Synapse lab, then thro
 
 Synapse runs only on your machine. Services bind to localhost, credentials stay in ignored file-backed secrets, and lab commands leave existing Docker volumes untouched.
 
+For the project vocabulary and the reasoning behind the main architectural choices, read [the documentation index](README.md) and [the context glossary](../CONTEXT.md).
+
 ## Before you start
 
 Install the required tools on a Debian-family or RHEL-family Linux system.
@@ -170,7 +172,7 @@ python3 "Ask/ask.py" --raw-json "What is in my indexed notes?"
 Use dry-run only when you intentionally want a no-network preview:
 
 ```bash
-python3 "Ask/ask.py" --dry-run --raw-json "What algorithm does OSPF use?" --note "examples/obsidian-vault/Synapse-Demo/example-study-notes.md"
+python3 "Ask/ask.py" --dry-run --raw-json "What tools make up my knowledge system, and what are they used for?" --note "examples/obsidian-vault/Synapse-Demo/knowledge-system-notes.md"
 ```
 
 ### TUI commands
@@ -262,16 +264,26 @@ You usually edit only these values:
 - `SYNAPSE_MAX_PARALLEL_EXECUTIONS`: concurrent Synapse API work items. Default `2`.
 - `SYNAPSE_EMBED_BATCH_SIZE`: chunk embeddings per Ollama `/api/embed` request. Default `16`.
 - `SYNAPSE_HTTP_TIMEOUT_SECONDS`: timeout for Ollama, Qdrant, and Wiki.js requests. Default `180` seconds so larger local models can respond without failing the workflow early.
-- `RAG_TOP_K`: number of top Qdrant results to keep after score filtering. Default `5`.
+- `RAG_TOP_K`: number of top Qdrant results to keep after score filtering, grounding, and duplicate removal. Default `5`.
 - `RAG_CANDIDATE_K`: initial Qdrant query limit before score and grounding filters. Default `25`. Must be `>=` `RAG_TOP_K`.
 - `RAG_SCORE_THRESHOLD`: minimum Qdrant similarity score for a result to be accepted. Default `0.35`. Set `0` to accept all.
 - `RAG_QUERY_TERM_MIN_COVERAGE`: fraction of query term groups that must match a chunk for it to pass grounding. Default `0.6`.
 - `RAG_QUERY_TERM_MIN_MATCHES`: minimum number of query term groups that must match a chunk regardless of coverage. Default `2`.
 - `RAG_DOMAIN_GLOSSARY_JSON`: JSON object mapping canonical terms to alias lists for query expansion. Default `{}`.
-- `SYNAPSE_ANSWER_VALIDATION`: how strictly to validate LLM answers against source quotes. `structural` (default) checks citation format only. `quote_overlap` checks trigram overlap between the answer and `quoted_support` (refuses below threshold). `extractive` requires the answer text to appear verbatim in the quoted support.
+- `SYNAPSE_ANSWER_VALIDATION`: how strictly to validate LLM answers against source quotes. `quote_overlap` (default) checks trigram overlap between the answer and `quoted_support` and refuses unsupported paraphrases. `extractive` requires the answer text to appear verbatim in the quoted support. `structural` checks citation format only and is an explicitly diagnostic mode.
 - `RAG_QUOTE_OVERLAP_THRESHOLD`: minimum trigram overlap ratio for `quote_overlap` validation. Default `0.3`. Set lower to allow looser paraphrases; higher to demand closer matches.
 
-Ask responses include cited sources plus a `quoted_support` snippet from the retrieved chunk. With `SYNAPSE_ANSWER_VALIDATION=structural` (default), the citation gate checks valid citation numbers and source locators only; it does not prove the answer is factually correct. Use `quote_overlap` or `extractive` validation modes to refuse answers that lack support from the quoted source text.
+Ask responses include cited sources plus a `quoted_support` snippet from the retrieved chunk. With the default `SYNAPSE_ANSWER_VALIDATION=quote_overlap`, the citation gate checks valid trailing citation numbers, source locators, and overlap between the answer and quoted support. Use `structural` only when diagnosing citation mechanics without grounding enforcement.
+
+Note publication identity is derived from the normalized vault path, not the Markdown title. Editing a title updates the existing Wiki.js page instead of creating a second path. Send `delete: true` to the note endpoint to remove the note's Qdrant chunks and then its Wiki.js page; if the page deletion fails, searchable chunks have already been removed so stale content cannot be returned as grounded evidence.
+
+Run the no-network AI contract evaluation with:
+
+```bash
+make evaluate
+```
+
+It reports grounded accuracy, refusal precision, citation validity, prompt-injection resistance, latency, and context size. It uses deterministic in-memory adapters and does not claim real model quality.
 
 Note: `.env` and `secrets/` are private. Do not commit them, share them, or paste real token values into docs, issues, benchmark output, screenshots, or chat. Keep `SYNAPSE_AUTH_DISABLED=false` for the live lab; `SYNAPSE_AUTH_DISABLED=true` is only for no-network demo runs.
 

@@ -610,6 +610,22 @@ def test_source_scoring_rejects_out_of_range_citation_before_final_citation():
     assert "invalid source citation(s): 99" in result.source_errors
 
 
+def test_source_scoring_requires_citations_to_end_the_answer():
+    result = score_answer(
+        '{"answer": "OSPF uses Dijkstra SPF. [1]. Additional trailing claim is uncited.", "sources": [{"source_path": "Synapse-Demo/ospf.md"}]}',
+        {
+            "required_facts": ["Dijkstra SPF"],
+            "forbidden_facts": [],
+            "expected_sources": ["Synapse-Demo/ospf.md"],
+            "required_source_count": 1,
+        },
+        require_sources=True,
+    )
+
+    assert not result.passed
+    assert "expected a trailing source citation" in result.source_errors
+
+
 def test_unsupported_answer_behavior():
     result = score_answer(
         "Insufficient context. The notes do not provide a private lab password.",

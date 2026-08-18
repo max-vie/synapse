@@ -445,10 +445,10 @@ def test_dotenv_loads_file_backed_webhook_token(tmp_path, monkeypatch):
 
 
 def test_note_path_is_public_safe_for_demo_repo_and_external_files(tmp_path):
-    demo = DEMO_VAULT / "Synapse-Demo" / "example-study-notes.md"
+    demo = DEMO_VAULT / "Synapse-Demo" / "knowledge-system-notes.md"
     external = tmp_path / "private-note.MD"
     external.write_text("# Private\n", encoding="utf-8")
-    assert local_note_metadata_path(demo) == "Synapse-Demo/example-study-notes.md"
+    assert local_note_metadata_path(demo) == "Synapse-Demo/knowledge-system-notes.md"
     assert local_note_metadata_path(external) == "private-note.md"
     assert str(tmp_path) not in local_note_metadata_path(external)
 

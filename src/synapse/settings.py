@@ -64,6 +64,8 @@ class Settings(Mapping[str, str]):
         raw = self.get(key)
         if raw is None:
             return default
+        # Accept the same operator-friendly spellings at validation and request
+        # time; otherwise startup could allow a mode the router later rejects.
         return raw.strip().casefold() in {"1", "true", "yes", "on"}
 
     def validate(self) -> None:

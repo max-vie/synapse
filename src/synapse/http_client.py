@@ -12,6 +12,8 @@ from .upstream import UpstreamError
 
 
 def default_timeout_seconds() -> float:
+    # Local models can be slow, but a non-positive timeout would turn a failed
+    # dependency into an indefinitely blocked worker.
     try:
         return max(1.0, float(os.environ.get("SYNAPSE_HTTP_TIMEOUT_SECONDS", "180")))
     except ValueError:
@@ -43,6 +45,8 @@ def request_json(method: str, url: str, payload: dict[str, Any], headers: dict[s
         with urlopen(request, timeout=timeout) as response:  # noqa: S310 - local lab URLs are configured by the operator.
             raw = response.read().decode("utf-8")
     except HTTPError as error:
+        # Keep upstream detail on the exception for internal diagnosis. The
+        # FastAPI seam exposes only the stable error code to callers.
         detail = error.read().decode("utf-8", errors="replace")
         raise UpstreamError(
             _upstream_code_from_url(url),

@@ -141,6 +141,9 @@ jobs:
       - name: Safe demo
         run: python scripts/demo.py
 
+      - name: Deterministic source-grounded AI evaluation
+        run: python -m scripts.evaluate --format text
+
       - name: Tests
         run: python -m pytest -q
 
